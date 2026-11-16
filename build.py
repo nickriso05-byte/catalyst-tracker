@@ -896,6 +896,28 @@ def sec_names():
     return {v["ticker"].upper(): v["title"] for v in _sec_tickers()}
 
 
+# Historical averages by stage (BIO / Informa Pharma Intelligence / QLS, "Clinical Development Success Rates
+# 2011-2020", all indications). A placeholder until the drug-specific odds model is validated.
+BASE_SOURCE = "BIO/Informa, Clinical Development Success Rates 2011-2020"
+_PH3 = re.compile(r"phase\s*(?:3|iii)\b|pivotal|registrational", re.I)
+_PH2 = re.compile(r"phase\s*(?:2|ii)(?:[ab])?\b", re.I)
+_PH1 = re.compile(r"phase\s*(?:1|i)(?:[ab])?\b", re.I)
+
+
+def baseline_odds(e):
+    t, q = e.get("type"), e.get("quote") or ""
+    if t in ("PDUFA date", "Advisory committee"):
+        return {"p": 0.906, "what": "of drugs that reach an FDA filing are eventually approved (not always on the first review)"}
+    if t == "Data readout":
+        if _PH3.search(q):
+            return {"p": 0.578, "what": "of Phase 3 drugs go on to an FDA filing"}
+        if _PH2.search(q):
+            return {"p": 0.289, "what": "of Phase 2 drugs make it to Phase 3"}
+        if _PH1.search(q):
+            return {"p": 0.520, "what": "of Phase 1 drugs make it to Phase 2"}
+    return None
+
+
 def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
     """Full refresh, written in two passes so the calendar shows fast on a cold server:
       pass 1 (seconds): catalysts + market cap, short interest and insider buys from bulk calls -> data.json
@@ -950,6 +972,9 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
     for e in events:
         e.pop("cik", None)
         e["company"] = summ[e["ticker"]]["name"]
+        b = baseline_odds(e)
+        if b:
+            e["base"] = {**b, "source": BASE_SOURCE}
     universe = {tk: (r["name"] or "").title() for tk, r in sorted(uni.items())}
     score_dist = {}
 

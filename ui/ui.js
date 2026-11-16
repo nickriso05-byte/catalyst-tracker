@@ -11,7 +11,7 @@ export default function (component) {
   S.data = data || {};
   S.trigger = setTriggerValue;
   const D = S.data.snap;
-  if (!D) { $("#rows").innerHTML = `<tr><td colspan="10" class="empty">Loading the catalyst calendar…</td></tr>`; wire(); return; }
+  if (!D) { $("#rows").innerHTML = `<tr><td colspan="11" class="empty">Loading the catalyst calendar…</td></tr>`; wire(); return; }
 
   const T = D.tickers || {}, U = D.universe || {}, TODAY = new Date(D.today + "T00:00:00"), dayMs = 864e5;
   const days = iso => Math.round((new Date(iso + "T00:00:00") - TODAY) / dayMs);
@@ -139,7 +139,7 @@ export default function (component) {
     let html = "", last = null;
     for (const e of rows){
       const g = groupOf(e);
-      if (g !== last){ html += `<tr class="group"><td colspan="10">${esc(g)}</td></tr>`; last = g; }
+      if (g !== last){ html += `<tr class="group"><td colspan="11">${esc(g)}</td></tr>`; last = g; }
       const t = T[e.ticker] || {};
       const sig = signals(e.ticker).map(([c,l]) => `<span class="tag ${c}">${esc(l)}</span>`).join("")
         + (e.was ? `<span class="tag moved" title="Earlier filing said ${esc(e.was)}">Moved ${esc(e.moved)}</span>` : "");
@@ -152,10 +152,11 @@ export default function (component) {
         <td class="num">${pct(t.short?.si_float)}</td>
         <td class="num">${runwayCell(e.ticker, e)}</td>
         <td class="num hide-sm">${impliedCell(e.ticker, e)}</td>
+        <td class="num hide-sm">${e.base ? `<span title="Historically, ${Math.round(e.base.p*100)}% ${esc(e.base.what)}. Source: ${esc(e.base.source)}. Not drug-specific.">${Math.round(e.base.p*100)}%</span>` : `<span class="muted">—</span>`}</td>
         <td class="num hide-sm">${scoreCell(e.ticker)}</td>
         <td class="hide-sm">${sig}</td></tr>`;
     }
-    $("#rows").innerHTML = html || `<tr><td colspan="10" class="empty">No catalysts match these filters.</td></tr>`;
+    $("#rows").innerHTML = html || `<tr><td colspan="11" class="empty">No catalysts match these filters.</td></tr>`;
   }
 
   // ---------- any-ticker lookup
@@ -271,6 +272,7 @@ export default function (component) {
         <div class="t">${esc(e.label)} · ${esc(e.type)}${e.drug ? " · " + esc(e.drug) : ""} <span class="muted" style="font-weight:400">${countdown(e)}</span>${e.new ? ' <span class="tag new">New filing</span>' : ""}</div>
         ${e.indication ? `<div class="muted">${esc(e.indication)}</div>` : ""}
         ${e.was ? `<div class="warn">Moved ${esc(e.moved)}: earlier filing said ${esc(e.was)}</div>` : ""}
+        ${e.base ? `<div class="muted">Historical average: ${Math.round(e.base.p*100)}% ${esc(e.base.what)} <span style="font-size:12px">(${esc(e.base.source)}; not drug-specific odds)</span></div>` : ""}
         ${e.quote ? `<blockquote>“${esc(e.quote)}”</blockquote>` : ""}
         <div class="src">Source: ${(e.sources||[]).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.kind)} ${esc(fdate(s.date))}</a>`).join(" · ")}</div></div>`).join("") + `</div>`;
     html += ourScoreSection(t) + verdadSection(tk);

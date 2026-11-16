@@ -10,3 +10,5 @@ build.log
 *.tmp
 NOTES.md
 verdad/*.csv
+odds/cto/
+odds/*.log
