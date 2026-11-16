@@ -120,6 +120,68 @@ def live(tk: str, events_json: str, since: str | None):
 m = _mtime()
 D = load_snapshot(m) if m else None
 
+# --------------------------------------------------------------------------- Verdad-style scan (colleague's daily CSV)
+# Read from VERDAD_CSV_URL (e.g. a Google Sheet published as CSV) if set, else verdad/latest.csv.
+# Neither is in the public repo.
+VERDAD_LOCAL = HERE / "verdad" / "latest.csv"
+
+
+def _secret(name):
+    import os
+    if os.environ.get(name):
+        return os.environ[name]
+    try:
+        return st.secrets.get(name)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_verdad(url: str | None, local_mtime: float | None):
+    import csv
+    import io
+    if url:
+        import requests
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        text, asof = r.content.decode("utf-8-sig"), r.headers.get("Last-Modified")
+        asof = datetime.now(timezone.utc).isoformat() if not asof else asof
+    elif local_mtime:
+        text, asof = VERDAD_LOCAL.read_text(encoding="utf-8-sig"), datetime.fromtimestamp(local_mtime, timezone.utc).isoformat()
+    else:
+        return None
+
+    def f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    rows = {}
+    for r in csv.DictReader(io.StringIO(text)):
+        tk = (r.get("ticker") or "").strip().upper()
+        if not tk or f(r.get("score")) is None:
+            continue
+        rows[tk] = {"score": f(r["score"]), "tier1": f(r.get("tier1")), "tier2": f(r.get("tier2")), "funds": (r.get("tier1_funds") or "").strip(),
+                    "short_float": f(r.get("short_float")), "short": r.get("short_signal") or None,
+                    "insider_trans": f(r.get("insider_trans")), "insider": r.get("insider_signal") or None,
+                    "peer_mom": f(r.get("peer_mom")), "peer": r.get("peer_signal") or None,
+                    "ev_to_burn": f(r.get("ev_to_burn")), "value": r.get("value_signal") or None,
+                    "current_ratio": f(r.get("current_ratio")), "cash": r.get("cash_signal") or None}
+    scores = sorted(v["score"] for v in rows.values())
+    n = len(scores)
+    import bisect
+    for v in rows.values():
+        v["rank"] = 1 + n - bisect.bisect_right(scores, v["score"])         # 1 = best; ties share a rank
+        v["pctile"] = round(100 * (n - v["rank"]) / max(n - 1, 1))           # share of the scan ranked below it
+    return {"asof": asof, "n": n, "rows": rows}
+
+
+try:
+    V = load_verdad(_secret("VERDAD_CSV_URL"), VERDAD_LOCAL.stat().st_mtime if VERDAD_LOCAL.exists() else None)
+except Exception:
+    V = None
+
 # --------------------------------------------------------------------------- page <-> Python
 
 ss = st.session_state
@@ -171,7 +233,7 @@ UI = st.components.v2.component(
     css=(HERE / "ui" / "ui.css").read_text(encoding="utf-8"),
     js=(HERE / "ui" / "ui.js").read_text(encoding="utf-8"),
 )
-UI(key="ct", data={"snap": D, "card": card, "cardTk": tk, "refreshing": R["running"]},
+UI(key="ct", data={"snap": D, "card": card, "cardTk": tk, "refreshing": R["running"], "verdad": V},
    on_open_change=_on_open, on_close_change=_on_close, on_refresh_change=_on_refresh)
 
 

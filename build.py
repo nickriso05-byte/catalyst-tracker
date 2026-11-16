@@ -643,7 +643,8 @@ def enrich(tk: str, cik: int | None, next_exact: str | None, fresh: bool = False
     info = (uw_get(f"/api/stock/{tk}/info", ttl=24) or {}).get("data") or {}
     if not info or (info.get("sector") or "") != "Healthcare":
         return None
-    r = {"name": (info.get("full_name") or "").title(), "sector": info.get("sector"), "mcap": fnum(info.get("marketcap")),
+    # SEC's ticker list has the current company name; UW's can lag a rename (CBIO: Catalyst Biosciences -> Crescent Biopharma)
+    r = {"name": (sec_names().get(tk.upper()) or info.get("full_name") or "").title(), "sector": info.get("sector"), "mcap": fnum(info.get("marketcap")),
          "shares_out": fnum(info.get("outstanding")), "avg_vol": fnum(info.get("avg30_volume")),
          "has_options": bool(info.get("has_options")), "next_earnings": info.get("next_earnings_date")}
     # price + 1-month change

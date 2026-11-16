@@ -9,3 +9,4 @@ public/
 build.log
 *.tmp
 NOTES.md
+verdad/*.csv

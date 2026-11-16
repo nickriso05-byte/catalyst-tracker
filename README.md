@@ -44,6 +44,15 @@ The calendar shows about 20 to 30 seconds after a fresh start, and cash runway, 
 Company lookups work right away. Regular refreshes only look at what changed (new filings, prices, short interest, insider buys);
 quarterly financials and 13F holdings are reused for 2 to 3 days. A normal refresh takes about 25 seconds.
 
+## Verdad-style score (optional)
+The app can show a colleague's daily Verdad-style biotech scan next to the catalysts: a **Score** column
+(with rank), a **Verdad score** section on each company card (specialist funds, short interest, insiders,
+scientific peers, value vs. spending, balance sheet), and a **Top-scored with a catalyst** screen.
+It reads the scan CSV from `VERDAD_CSV_URL` in the secrets (for example a Google Sheet published as CSV),
+or locally from `verdad/latest.csv`. The scan is never committed to this public repo.
+Expected columns: ticker, score, tier1, tier2, tier1_funds, short_float, short_signal, insider_trans,
+insider_signal, peer_mom, peer_signal, ev_to_burn, value_signal, current_ratio, cash_signal.
+
 ## Where the numbers come from
 | Section | Source |
 |---|---|

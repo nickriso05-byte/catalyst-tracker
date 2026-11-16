@@ -11,7 +11,7 @@ export default function (component) {
   S.data = data || {};
   S.trigger = setTriggerValue;
   const D = S.data.snap;
-  if (!D) { $("#rows").innerHTML = `<tr><td colspan="9" class="empty">Loading the catalyst calendar…</td></tr>`; wire(); return; }
+  if (!D) { $("#rows").innerHTML = `<tr><td colspan="10" class="empty">Loading the catalyst calendar…</td></tr>`; wire(); return; }
 
   const T = D.tickers || {}, U = D.universe || {}, TODAY = new Date(D.today + "T00:00:00"), dayMs = 864e5;
   const days = iso => Math.round((new Date(iso + "T00:00:00") - TODAY) / dayMs);
@@ -52,6 +52,40 @@ export default function (component) {
     return "±" + (im.move_pct*100).toFixed(0) + "%";
   }
 
+  // ---------- Verdad-style scan (colleague's daily CSV)
+  const VV = S.data.verdad, VR = (VV && VV.rows) || {};
+  function scoreCell(tk){
+    const v = VR[tk];
+    if (!v) return `<span class="muted">—</span>`;
+    const cls = v.pctile >= 80 ? "hi" : v.pctile <= 20 ? "lo" : "";
+    return `<span class="score ${cls}" title="Ranked #${v.rank} of the ${VV.n} biotechs in the scan">${v.score.toFixed(0)}<small>#${v.rank} of ${VV.n}</small></span>`;
+  }
+  const SIG = {
+    short: {LOW:["good","Lightly shorted"], MID:["neu","Moderately shorted"], HIGH:["bad","Heavily shorted"], NEUTRAL:["neu","No clear short signal"]},
+    insider: {BUYING:["good","Insiders net buying"], SELLING:["bad","Insiders net selling"], NEUTRAL:["neu","No insider signal"]},
+    peer: {"PEERS-STRONG":["good","Peers trading strong"], "PEERS-MID":["neu","Peers middling"], "PEERS-WEAK":["bad","Peers trading weak"], "NO-PEERS":["neu","No peer group"]},
+    value: {CHEAP:["good","Cheap vs. its spending"], FAIR:["neu","Fairly valued vs. spending"], EXPENSIVE:["bad","Expensive vs. spending"], "AT-CASH":["good","Trading near its cash"]},
+    cash: {STRONG:["good","Strong balance sheet"], OK:["neu","Adequate balance sheet"], WEAK:["bad","Weak balance sheet"]},
+  };
+  function verdadSection(tk){
+    const v = VR[tk];
+    if (!VV) return "";
+    if (!v) return `<div class="dsec"><h3>Verdad score <small>not in today's scan</small></h3><div class="muted">This company isn't in the latest Verdad-style scan of ${VV.n} biotechs.</div></div>`;
+    const sig = (k, label, detail) => { const m = (SIG[k]||{})[v[k]]; if (!m) return ""; return `<div class="sig ${m[0]}"><b>${label}</b>${esc(m[1])}${detail ? ` <span class="muted">${detail}</span>` : ""}</div>`; };
+    return `<div class="dsec"><h3>Verdad score <small>scan as of ${esc(fdate(VV.asof))} · ${VV.n} biotechs</small></h3><div class="stats">
+      ${stat("Score", v.score.toFixed(0), `ranked #${v.rank} of ${VV.n}`)}
+      ${stat("Specialist funds", (v.tier1 ?? 0).toFixed(0), `top-tier funds holding it${v.tier2 ? ` · ${v.tier2.toFixed(0)} second-tier` : ""}`)}</div>
+      ${v.funds ? `<div class="muted" style="margin-top:8px">${esc(v.funds)}</div>` : ""}
+      <div class="sigs">
+        ${sig("short", "Short interest", v.short_float != null ? `(${v.short_float.toFixed(1)}% of float)` : "")}
+        ${sig("insider", "Insiders", v.insider_trans != null && v.insider_trans !== 0 ? `(${v.insider_trans > 0 ? "+" : ""}${v.insider_trans.toFixed(1)}% net)` : "")}
+        ${sig("peer", "Scientific peers", "")}
+        ${sig("value", "Value", v.ev_to_burn != null && v.value !== "AT-CASH" ? `(EV ${v.ev_to_burn.toFixed(1)}× annual burn)` : "")}
+        ${sig("cash", "Balance sheet", v.current_ratio != null ? `(current ratio ${v.current_ratio.toFixed(1)})` : "")}
+      </div>
+      <div class="callout" style="background:#f4f4f4">The score combines the factors Verdad's research found predictive in biotech: specialist-fund ownership, light short interest, insider buying, strong scientific peers and low value vs. spending. Verdad's results are their own backtests; this version of the score hasn't been backtested yet.</div></div>`;
+  }
+
   // ---------- calendar
   const TYPES = ["PDUFA date","Advisory committee","Data readout","Regulatory submission","EU decision"];
   if (!S.active) S.active = new Set(TYPES);
@@ -75,7 +109,7 @@ export default function (component) {
     let html = "", last = null;
     for (const e of rows){
       const g = groupOf(e);
-      if (g !== last){ html += `<tr class="group"><td colspan="9">${esc(g)}</td></tr>`; last = g; }
+      if (g !== last){ html += `<tr class="group"><td colspan="10">${esc(g)}</td></tr>`; last = g; }
       const t = T[e.ticker] || {};
       const sig = signals(e.ticker).map(([c,l]) => `<span class="tag ${c}">${esc(l)}</span>`).join("")
         + (e.was ? `<span class="tag moved" title="Earlier filing said ${esc(e.was)}">Moved ${esc(e.moved)}</span>` : "");
@@ -88,9 +122,10 @@ export default function (component) {
         <td class="num">${pct(t.short?.si_float)}</td>
         <td class="num">${runwayCell(e.ticker, e)}</td>
         <td class="num hide-sm">${impliedCell(e.ticker, e)}</td>
+        <td class="num hide-sm">${scoreCell(e.ticker)}</td>
         <td class="hide-sm">${sig}</td></tr>`;
     }
-    $("#rows").innerHTML = html || `<tr><td colspan="9" class="empty">No catalysts match these filters.</td></tr>`;
+    $("#rows").innerHTML = html || `<tr><td colspan="10" class="empty">No catalysts match these filters.</td></tr>`;
   }
 
   // ---------- any-ticker lookup
@@ -126,7 +161,10 @@ export default function (component) {
     const tks = Object.keys(T);
     const withNext = d => tks.map(tk => [tk, nextEvent(tk, d)]).filter(x => x[1]);
     const S2 = [];
-    S2.push(["Squeeze watch", "Short interest at or above 15% of float, with a catalyst inside 120 days. Sorted by short % of float.",
+    if (VV) S2.push(["Top-scored with a catalyst", "In the top 20% of the Verdad-style scan, with a catalyst in the next 90 days. Sorted by score.",
+      withNext(90).filter(([tk]) => (VR[tk]?.pctile || 0) >= 80).sort((a,b) => VR[b[0]].score - VR[a[0]].score).slice(0,15),
+      [["Score", tk => scoreCell(tk)], ["Specialists", tk => (VR[tk].tier1 ?? 0).toFixed(0)], ["Runway", tk => runwayCell(tk)]]]);
+    S2.push(["Heavily shorted into a catalyst", "Short interest at or above 15% of float, with a catalyst inside 120 days. Treat as a risk list: in Verdad's research the most-shorted biotechs returned about −19% a year on average.",
       withNext(120).filter(([tk]) => (T[tk].short?.si_float||0) >= .15).sort((a,b) => T[b[0]].short.si_float - T[a[0]].short.si_float).slice(0,15),
       [["Short %", tk => pct(T[tk].short.si_float)], ["Days to cover", tk => T[tk].short.dtc?.toFixed(1) ?? "—"], ["Borrow fee", tk => T[tk].short.fee != null ? T[tk].short.fee.toFixed(1)+"%" : "—"]]]);
     S2.push(["Insider buying", "Open-market purchases by officers, directors or 10% owners in the last 90 days.",
@@ -205,6 +243,7 @@ export default function (component) {
         ${e.was ? `<div class="warn">Moved ${esc(e.moved)}: earlier filing said ${esc(e.was)}</div>` : ""}
         ${e.quote ? `<blockquote>“${esc(e.quote)}”</blockquote>` : ""}
         <div class="src">Source: ${(e.sources||[]).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.kind)} ${esc(fdate(s.date))}</a>`).join(" · ")}</div></div>`).join("") + `</div>`;
+    html += verdadSection(tk);
     if (im){
       html += `<div class="dsec"><h3>Options-implied move <small>to the first expiry after ${esc(fdate(im.for_date))}</small></h3><div class="stats">
         ${stat("Implied move", "±" + (im.move_pct*100).toFixed(0) + "%", "±" + px(im.move_usd) + " by " + fdate(im.expiry))}
