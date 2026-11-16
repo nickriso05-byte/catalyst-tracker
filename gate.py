@@ -35,11 +35,39 @@ def _password() -> str | None:
         return None
 
 
+_COOKIE = "ct_auth"
+_COOKIE_DAYS = 365
+
+
+def _token(password: str) -> str:
+    """What the browser keeps: a fingerprint of the password, never the password itself.
+    Changing APP_PASSWORD changes the fingerprint, which signs every browser out."""
+    return hmac.new(password.encode(), b"catalyst-tracker-login-v1", "sha256").hexdigest()
+
+
+def _remember(token: str) -> None:
+    """Store the login in a first-party cookie for a year, so a reload or the app waking up doesn't ask again."""
+    import streamlit.components.v1 as components
+    host = (st.context.headers.get("Host") or "").split(":")[0]
+    secure = "" if host in ("localhost", "127.0.0.1") else "; Secure"
+    components.html(f"""<script>
+      try {{ window.parent.document.cookie = "{_COOKIE}={token}; max-age={_COOKIE_DAYS * 86400}; path=/; SameSite=Lax{secure}"; }} catch (e) {{}}
+    </script>""", height=0)
+
+
 def require() -> None:
-    """Show the login and stop the script until this session is unlocked."""
-    if st.session_state.get(_KEY):
-        return
+    """Show the login and stop the script until this browser is unlocked."""
     expected = _password()
+    if expected:
+        token = _token(expected)
+        if hmac.compare_digest((st.context.cookies.get(_COOKIE) or ""), token):
+            st.session_state[_KEY] = True
+            return
+        if st.session_state.get(_KEY):
+            _remember(token)     # logged in this session but no cookie yet: set it
+            return
+    elif st.session_state.get(_KEY):
+        return
     # Opened on this machine (localhost) with no password set: nothing to guard.
     host = (st.context.headers.get("Host") or "").split(":")[0]
     if not expected and host in ("localhost", "127.0.0.1"):
