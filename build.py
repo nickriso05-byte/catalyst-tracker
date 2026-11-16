@@ -517,7 +517,11 @@ def merge_events(sec_raw, uw_events):
     def same_drug(a, b):
         da, db = (a.get("drug") or "").lower(), (b.get("drug") or "").lower()
         return not da or not db or da == db
-    out.sort(key=lambda e: (PREC_RANK[e["precision"]], 0 if e.get("drug") else 1))
+    ACCT = re.compile(r"lease|rent|liabilit|ROU asset|remeasur|contractual|amortiz|accrued|interest expense", re.I)
+    def quality(e):   # prefer the sentence that names the drug, and not accounting boilerplate
+        q = (e.get("quote") or "").lower()
+        return (2 if e.get("drug") and e["drug"].lower() in q else 0) - (3 if ACCT.search(q) else 0)
+    out.sort(key=lambda e: (PREC_RANK[e["precision"]], -quality(e), 0 if e.get("drug") else 1))
     kept = []
     for e in out:
         twin = next((k for k in kept if k["ticker"] == e["ticker"] and k["type"] == e["type"] and same_drug(k, e)

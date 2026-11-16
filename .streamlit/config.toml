@@ -1,14 +1,12 @@
 [theme]
 base = "light"
+# Paradigm orange: Streamlit's own controls (toggles, sliders, focus rings)
+# take this, and it reads on both the light ground and the dark navy one.
 primaryColor = "#cd4f17"
-backgroundColor = "#fefefe"
-secondaryBackgroundColor = "#f1f1f1"
-textColor = "#000000"
-font = "'Figtree':https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;700&display=swap, sans-serif"
-headingFont = "'Libre Caslon Text':https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:wght@400;700&display=swap, serif"
+backgroundColor = "#f2f4f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#00131f"
+font = "'Sofia Sans':https://fonts.googleapis.com/css2?family=Sofia+Sans:wght@400;500;600;700;800&display=swap, sans-serif"
 
 [server]
 headless = true
-
-[browser]
-gatherUsageStats = false

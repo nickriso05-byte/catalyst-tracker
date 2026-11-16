@@ -17,12 +17,12 @@ A Streamlit app with three parts:
 ## Files
 | File | What it is |
 |---|---|
-| `app.py` | The Streamlit app, including the scheduled refresher |
+| `app.py` | Thin Streamlit shell: password, scheduled refresher, live company cards, and mounting the UI |
+| `ui/ui.html`, `ui/ui.css`, `ui/ui.js` | The interface (calendar, screens, search, slide-in company card), mounted as a Streamlit v2 component. Clicking a company sends an "open" trigger to Python, which pulls the live card and passes it back. No page reloads. |
 | `build.py` | Data engine: SEC full-text search, catalyst extraction, Unusual Whales and EDGAR pulls. Also runs standalone: `python build.py` |
-| `card.py` | HTML for the company card, in the Catalyst Trader member-site styling |
-| `gate.py` | Password screen (APP_PASSWORD) |
-| `theme.css` | Theme tokens taken from the member site |
-| `public/index.html` | An earlier static-site version (not used by the app; gitignored) |
+| `gate.py` | Password screen (APP_PASSWORD), remembered for a year per browser |
+| `theme.css` | Theme tokens taken from the Catalyst Trader member site |
+| `cache/docs/` | Catalyst sentences already read from SEC filings, shipped so a fresh server starts fast |
 
 ## Run locally
 ```
