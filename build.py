@@ -517,7 +517,7 @@ def merge_events(sec_raw, uw_events):
     def same_drug(a, b):
         da, db = (a.get("drug") or "").lower(), (b.get("drug") or "").lower()
         return not da or not db or da == db
-    ACCT = re.compile(r"lease|rent|liabilit|ROU asset|remeasur|contractual|amortiz|accrued|interest expense", re.I)
+    ACCT = re.compile(r"\blease|\brent\b|liabilit|ROU asset|remeasur|contractual|amortiz|accrued|interest expense", re.I)
     def quality(e):   # prefer the sentence that names the drug, and not accounting boilerplate
         q = (e.get("quote") or "").lower()
         return (2 if e.get("drug") and e["drug"].lower() in q else 0) - (3 if ACCT.search(q) else 0)
@@ -554,9 +554,136 @@ SPECIALISTS = ["baker bros", "ra capital", "perceptive", "deerfield", "orbimed",
                "monashee", "tang capital", "two seas", "ptolemy", "abingworth"]
 
 
+SPECIALISTS += ["bvf", "logos", "braidwell", "casdin", "bain capital life"]
+
+# Top-tier biotech specialists: the 26-fund tier-1 roster used by the colleague's Verdad-style screener,
+# written as fragments of their 13F filer names. The score's specialist factor counts only these.
+TIER1 = ["orbimed", "baker bros", "ra capital", "sphera", "perceptive", "rock springs", "soleus", "rtw investments",
+         "logos global", "deep track", "braidwell", "tcg crossover", "vivo capital", "deerfield", "cormorant", "bvf",
+         "frazier", "redmile", "casdin", "ecor1", "commodore", "paradigm biocapital", "avoro", "samsara",
+         "bain capital life", "fairmount"]
+
+
+# Whole-word matching: a bare substring test let "ra capital" match "Yakira Capital", "Mora Capital", etc.
+_SPEC_RX = re.compile(r"\b(?:" + "|".join(re.escape(x.strip()) for x in SPECIALISTS) + r")\b")
+_TIER1_RX = re.compile(r"\b(?:" + "|".join(re.escape(x.strip()) for x in TIER1) + r")\b")
+
+
 def is_specialist(name: str) -> bool:
-    n = (name or "").lower()
-    return any(s in n for s in SPECIALISTS)
+    return bool(_SPEC_RX.search((name or "").lower()))
+
+
+def is_tier1(name: str) -> bool:
+    return bool(_TIER1_RX.search((name or "").lower()))
+
+
+# --------------------------------------------------------------------------- Verdad-style score (our own)
+# Factors from Verdad's "Biotech Investing" paper that we can measure. Peer momentum is left out:
+# Verdad defines peers by clinical-trial similarity, which we don't have.
+#   spec  share of shares held by top-tier specialist funds (higher is better)
+#   short short interest as % of float (lower is better)
+#   ins   open-market insider buying in 90 days, in basis points of market cap (higher is better)
+#   value annual spending (R&D + SG&A) per dollar of enterprise value ex-cash (higher = cheaper = better)
+FACTORS = ("spec", "short", "ins", "value")
+
+
+def spend_and_ev(fin, mcap):
+    """Annualized R&D + SG&A from the last 4 quarters, and enterprise value ex-cash (market cap + debt - cash)."""
+    inc = sorted([i for i in (fin or {}).get("income_statements", []) if i.get("report_type") == "quarterly"],
+                 key=lambda i: i["fiscal_date_ending"], reverse=True)[:4]
+    bs = sorted([b for b in (fin or {}).get("balance_sheets", []) if b.get("report_type") == "quarterly"],
+                key=lambda b: b["fiscal_date_ending"], reverse=True)
+    spend = [(fnum(i.get("research_and_development")) or 0) + (fnum(i.get("selling_general_and_administrative")) or 0) for i in inc]
+    spend = [s for s in spend if s > 0]
+    if len(spend) < 2 or not bs or not mcap:
+        return None
+    b = bs[0]
+    cash = max(fnum(b.get("cash_and_short_term_investments")) or 0,
+               (fnum(b.get("cash_and_cash_equivalents")) or 0) + (fnum(b.get("short_term_investments")) or 0))
+    debt = fnum(b.get("short_long_term_debt_total")) or 0
+    return {"spend": sum(spend) / len(spend) * 4, "ev": mcap + debt - cash}
+
+
+def _quarter_ends(n=2):
+    """The last n calendar quarter-ends before today, newest first."""
+    out, y, q = [], TODAY.year, (TODAY.month - 1) // 3   # q = completed quarters this year
+    while len(out) < n:
+        if q == 0:
+            y, q = y - 1, 4
+        out.append(date(y, 3 * q, 31 if q in (1, 4) else 30).isoformat())
+        q -= 1
+    return out
+
+
+def inst_rows(tk: str, ttl=12):
+    """13F holders of a ticker from the latest quarter AND the one before. UW's default only returns funds that
+    have already filed the newest quarter, so mid-season it would drop every fund that hasn't filed yet."""
+    p = {"limit": 500, "order": "value", "order_direction": "desc"}
+    rows = list((uw_get(f"/api/institution/{tk}/ownership", p, ttl=ttl) or {}).get("data") or [])
+    for qe in _quarter_ends(2):
+        rows += (uw_get(f"/api/institution/{tk}/ownership", {**p, "date": qe}, ttl=24 * 7) or {}).get("data") or []
+    return rows
+
+
+def latest_holdings(inst):
+    """Each filer's most recent 13F position. During a filing season some funds have filed the new quarter and
+    others haven't yet; taking only the newest report date would drop everyone who hasn't filed."""
+    cutoff = (TODAY - timedelta(days=200)).isoformat()
+    best = {}
+    for x in inst:
+        rd = x.get("report_date") or ""
+        if rd < cutoff:
+            continue
+        k = x.get("cik") or (x.get("name") or "").lower()
+        if k not in best or rd > (best[k].get("report_date") or ""):
+            best[k] = x
+    rows = [x for x in best.values() if (fnum(x.get("units")) or 0) > 0]
+    rows.sort(key=lambda x: fnum(x.get("value")) or 0, reverse=True)
+    return rows, max((x.get("report_date") or "" for x in rows), default=None)
+
+
+def tier1_share(inst_rows, shares_out):
+    rows = [x for x in inst_rows if is_tier1(x.get("name"))]
+    units = sum(fnum(x.get("units")) or 0 for x in rows)
+    return {"pct": units / shares_out if shares_out else None, "n": len({(x.get("name") or "").lower() for x in rows}),
+            "funds": sorted({(x.get("name") or "").title() for x in rows})[:8]}
+
+
+def factor_values(mcap, si_float, buy_90d, se, spec):
+    """Raw factor values, oriented so higher is better. None when the input is missing."""
+    f = {}
+    if spec and spec.get("n") is not None:
+        # Verdad: the strongest signal is several specialists owning the same stock. Count top-tier funds;
+        # the share of stock they hold only breaks ties.
+        f["spec"] = spec["n"] + min(spec.get("pct") or 0, 0.5)
+    if si_float is not None:
+        f["short"] = -si_float
+    if mcap:
+        f["ins"] = (buy_90d or 0) / mcap * 1e4
+    if se:
+        f["value"] = 1e6 if se["ev"] <= 0 else se["spend"] / se["ev"]   # trading below cash: cheapest
+    return f
+
+
+def _pctile(sorted_vals, v):
+    """Mid-rank percentile (0-100) of v among sorted_vals, so ties (e.g. no insider buys) land in the middle."""
+    import bisect
+    if not sorted_vals:
+        return None
+    lo, hi = bisect.bisect_left(sorted_vals, v), bisect.bisect_right(sorted_vals, v)
+    return 100 * (lo + hi) / 2 / len(sorted_vals)
+
+
+def score_from(factors: dict, dist: dict):
+    """Equal-weight average of factor percentiles vs. the refresh's distribution. Needs at least 3 factors."""
+    parts = {k: _pctile(dist.get(k) or [], factors[k]) for k in FACTORS if k in factors and dist.get(k)}
+    parts = {k: v for k, v in parts.items() if v is not None}
+    if len(parts) < 3:
+        return None
+    score = round(sum(parts.values()) / len(parts))
+    allsc = dist.get("_scores") or []
+    rank = 1 + sum(1 for s in allsc if s > score) if allsc else None
+    return {"score": score, "rank": rank, "n": len(allsc) or None, "parts": {k: round(v) for k, v in parts.items()}}
 
 
 def runway(fin):
@@ -683,13 +810,14 @@ def enrich(tk: str, cik: int | None, next_exact: str | None, fresh: bool = False
                      "buy_90d": sum(t["value"] for t in trades if t["code"] == "P" and (t["date"] or "") >= d90),
                      "buyers_90d": len({t["who"] for t in trades if t["code"] == "P" and (t["date"] or "") >= d90}),
                      "sell_90d": sum(t["value"] for t in trades if t["code"] == "S" and not t["planned"] and (t["date"] or "") >= d90)}
-    # cash runway
-    r["runway"] = runway((uw_get(f"/api/stock/{tk}/financials", ttl=72) or {}).get("data"))
+    # cash runway + spending vs. enterprise value
+    fin = (uw_get(f"/api/stock/{tk}/financials", ttl=72) or {}).get("data")
+    r["runway"] = runway(fin)
+    r["value"] = spend_and_ev(fin, r.get("mcap"))
     # institutional holders (latest 13F quarter)
-    inst = (uw_get(f"/api/institution/{tk}/ownership", {"limit": 300, "order": "value", "order_direction": "desc"}, ttl=48) or {}).get("data") or []
-    if inst:
-        latest_q = max(x.get("report_date") or "" for x in inst)
-        cur = [x for x in inst if x.get("report_date") == latest_q]
+    inst = inst_rows(tk)
+    cur, latest_q = latest_holdings(inst)
+    if cur:
         so = fnum(cur[0].get("shares_outstanding")) or r.get("shares_out") or 0
         def row(x):
             hu = x.get("historical_units") or []
@@ -700,6 +828,7 @@ def enrich(tk: str, cik: int | None, next_exact: str | None, fresh: bool = False
                     "pct_out": units / so if so else None, "chg": fnum(x.get("units_changed")), "status": status,
                     "specialist": is_specialist(x.get("name"))}
         rows = [row(x) for x in cur]
+        r["tier1"] = tier1_share(cur, so)
         r["holders"] = {"quarter": latest_q, "count": len(rows),
                         "pct_out": sum(x["units"] for x in rows) / so if so else None,
                         "top": rows[:10], "specialists": [x for x in rows if x["specialist"]][:10],
@@ -720,6 +849,7 @@ def enrich(tk: str, cik: int | None, next_exact: str | None, fresh: bool = False
     if cik:
         r["stakes"], r["dilution"] = sec_stakes(cik, ttl=fast(6))
         r["cik"] = cik
+    r["factors"] = factor_values(r.get("mcap"), (r.get("short") or {}).get("si_float"), r["insiders"]["buy_90d"], r.get("value"), r.get("tier1"))
     return r
 
 
@@ -797,10 +927,11 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
         e.pop("cik", None)
         e["company"] = summ[e["ticker"]]["name"]
     universe = {tk: (r["name"] or "").title() for tk, r in sorted(uni.items())}
+    score_dist = {}
 
     def write(phase):
         payload = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "today": TODAY.isoformat(),
-                   "phase": phase, "events": events, "tickers": summ, "universe": universe,
+                   "phase": phase, "events": events, "tickers": summ, "universe": universe, "score_dist": score_dist,
                    "notes": {"filings_window_days": days, "filings_read": len(hits), "competitor_quotes_dropped": n_drop,
                              "universe_min_mcap": min_mcap}}
         OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -815,10 +946,14 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
 
     def job(tk):
         exact = sorted(e["start"] for e in events if e["ticker"] == tk and e["precision"] == "day" and e["start"] >= TODAY.isoformat())
-        out = {"runway": None, "implied": None, "stakes": [], "dilution": []}
+        out = {"runway": None, "implied": None, "stakes": [], "dilution": [], "value": None, "tier1": None}
         try:
-            rw = runway((uw_get(f"/api/stock/{tk}/financials", ttl=72) or {}).get("data"))
+            fin = (uw_get(f"/api/stock/{tk}/financials", ttl=72) or {}).get("data")
+            rw = runway(fin)
             out["runway"] = {k: rw.get(k) for k in ("months", "runs_out", "qtr_burn")} if rw else None
+            out["value"] = spend_and_ev(fin, summ[tk]["mcap"])
+            cur, _q = latest_holdings(inst_rows(tk))
+            out["tier1"] = tier1_share(cur, fnum(cur[0].get("shares_outstanding")) if cur else None) if cur else {"pct": 0.0, "n": 0, "funds": []}
             if exact:
                 out["implied"] = implied_move(tk, exact[0])
             cik = tmap.get(tk)
@@ -834,6 +969,16 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
             summ[tk].update(out)
             if i % 100 == 0:
                 log(f"Company detail: {i}/{len(tickers)}")
+    # Our Verdad-style score: each factor ranked against every company in this refresh, then averaged.
+    for tk in tickers:
+        t = summ[tk]
+        t["factors"] = factor_values(t["mcap"], (t.get("short") or {}).get("si_float"), (t.get("insiders") or {}).get("buy_90d"), t.get("value"), t.get("tier1"))
+    dist = {k: sorted(summ[tk]["factors"][k] for tk in tickers if k in summ[tk]["factors"]) for k in FACTORS}
+    prelim = [score_from(summ[tk]["factors"], dist) for tk in tickers]
+    dist["_scores"] = sorted(p["score"] for p in prelim if p)
+    for tk in tickers:
+        summ[tk]["vscore"] = score_from(summ[tk]["factors"], dist)
+    score_dist.clear(); score_dist.update(dist)
     write("complete")
     stats = {"events": len(events), "companies": len(tickers), "universe": len(universe), "seconds": round(time.time() - t0)}
     log(f"Done: {stats}")
@@ -1047,6 +1192,14 @@ def drop_third_party(events, names: dict):
         own = {core_name(names.get(e["ticker"]) or ""), core_name(e.get("company") or "")} - {None}
         others = {m.group(1) for m in rx.finditer(q)} - own if rx else set()
         others = {o for o in others if e["ticker"] not in cores.get(o, set())}
+        # A drug code carries its owner's name: DYNE-251 is Dyne's, even when the sentence doesn't name Dyne.
+        m = re.match(r"([A-Za-z]{3,6})-\d", e.get("drug") or "")
+        if m:
+            pre = m.group(1).lower()
+            own_first = {(names.get(e["ticker"]) or e.get("company") or "").split(" ")[0].lower().strip(",.")}
+            owner = [tk for tk, nm in names.items() if tk != e["ticker"] and (nm or "").split(" ")[0].lower().strip(",.") == pre]
+            if owner and pre not in own_first and not PARTNER.search(q):
+                others.add(owner[0])
         if others and not any(o in q for o in own) and not PARTNER.search(q):
             dropped += 1
             continue

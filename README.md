@@ -44,7 +44,18 @@ The calendar shows about 20 to 30 seconds after a fresh start, and cash runway, 
 Company lookups work right away. Regular refreshes only look at what changed (new filings, prices, short interest, insider buys);
 quarterly financials and 13F holdings are reused for 2 to 3 days. A normal refresh takes about 25 seconds.
 
-## Verdad-style score (optional)
+## Verdad-style score (built in)
+Every company gets a 0–100 score from the factors Verdad's "Biotech Investing" paper found predictive,
+recomputed on every refresh and live when a card opens:
+- **Top-tier specialist funds:** how many of the 26 tier-1 biotech funds hold it (share of stock breaks ties).
+  Uses each fund's latest 13F, Q2 or Q3, so funds don't drop out during filing season.
+- **Short interest:** % of float (lower is better).
+- **Insider buying:** open-market Form 4 buys in 90 days, relative to market cap.
+- **Value vs. spending:** annual R&D + SG&A per dollar of enterprise value ex-cash (cheaper is better).
+Each factor is ranked against the companies on the calendar and averaged equally. Peer momentum is left out
+(Verdad defines peers by clinical-trial similarity). Not backtested yet.
+
+## Colleague's scan (optional)
 The app can show a colleague's daily Verdad-style biotech scan next to the catalysts: a **Score** column
 (with rank), a **Verdad score** section on each company card (specialist funds, short interest, insiders,
 scientific peers, value vs. spending, balance sheet), and a **Top-scored with a catalyst** screen.

@@ -223,6 +223,8 @@ if tk:
     since = D["generated_at"][:10] if D else (date.today() - timedelta(days=150)).isoformat()
     try:
         t, new, fetched = live(tk, json.dumps(known), since)
+        if t and D and D.get("score_dist"):
+            t = {**t, "vscore": build.score_from(t.get("factors") or {}, D["score_dist"])}   # scored live, vs. this refresh
         card = {"tk": tk, "t": t, "new": new, "fetched": fetched}
     except Exception as ex:
         card = {"tk": tk, "t": None, "new": [], "fetched": time.time(),
