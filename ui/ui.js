@@ -72,15 +72,17 @@ export default function (component) {
     const valTxt = !se ? "No spending data" : se.ev <= 0 ? "Trading below its cash" : `EV ${(se.ev / se.spend).toFixed(1)}× annual R&D + SG&A`;
     return `<div class="dsec"><h3>Verdad-style score <small>vs. the ${v.n || "—"} companies with upcoming catalysts · updates every refresh</small></h3><div class="stats">
       ${stat("Score", v.score + " / 100", v.rank ? `ranked #${v.rank} of ${v.n}` : "")}
-      ${stat("Top-tier specialist funds", t1.n ?? "—", t1.pct != null ? `holding ${pct(t1.pct)} of shares` : "")}</div>
-      ${(t1.funds || []).length ? `<div class="muted" style="margin-top:8px">${esc(t1.funds.join(" · "))}</div>` : ""}
+      ${stat("Tier-1 specialist funds", t1.n ?? "—", t1.n2 ? `plus ${t1.n2} tier-2` : "no tier-2 funds")}
+      ${stat("Roster funds' stake", t1.pct != null ? pct(t1.pct) : "—", "of shares outstanding")}</div>
+      ${(t1.funds || []).length ? `<div style="margin-top:8px"><b>Tier 1:</b> <span class="muted">${esc(t1.funds.join(" · "))}</span></div>` : ""}
+      ${(t1.funds2 || []).length ? `<div><b>Tier 2:</b> <span class="muted">${esc(t1.funds2.join(" · "))}</span></div>` : ""}
       <div class="sigs">
-        <div class="sig ${tone(P.spec)}"><b>Specialist funds</b>${t1.n ? `${t1.n} top-tier fund${t1.n > 1 ? "s" : ""}` : "None of the top-tier funds"}${pr(P.spec)}</div>
+        <div class="sig ${tone(P.spec)}"><b>Specialist funds</b>${t1.n || t1.n2 ? `${t1.n || 0} tier-1, ${t1.n2 || 0} tier-2` : "None of the roster funds"}${pr(P.spec)}</div>
         <div class="sig ${tone(P.short)}"><b>Short interest</b>${s.si_float != null ? pct(s.si_float) + " of float" : "No data"}${pr(P.short)}</div>
         <div class="sig ${tone(P.ins)}"><b>Insider buying, 90 days</b>${ins.buy_90d ? money(ins.buy_90d) + " bought" : "No open-market buys"}${pr(P.ins)}</div>
         <div class="sig ${tone(P.value)}"><b>Value vs. spending</b>${valTxt}${pr(P.value)}</div>
       </div>
-      <div class="callout" style="background:#f4f4f4">Built on the factors Verdad's research found predictive in biotech: ownership by top-tier specialist funds, light short interest, insider buying, and a low price relative to R&D spending. Each is ranked against the companies on the calendar and averaged equally. Peer momentum is left out (Verdad uses clinical-trial similarity, which we don't have). Verdad's results are their own backtests; this score hasn't been backtested yet.</div></div>`;
+      <div class="callout" style="background:#f4f4f4">Built on the factors Verdad's research found predictive in biotech: ownership by the screener's 39-fund specialist roster (tier-1 funds weighted 100, tier-2 40, matched by SEC filer ID), light short interest, insider buying, and a low price relative to R&D spending. Each is ranked against the companies on the calendar and averaged equally. Peer momentum is left out (Verdad uses clinical-trial similarity, which we don't have). Verdad's results are their own backtests; this score hasn't been backtested yet.</div></div>`;
   }
   // colleague's scan (optional CSV)
   function hisCell(tk){
@@ -191,7 +193,7 @@ export default function (component) {
     const S2 = [];
     S2.push(["Top-scored with a catalyst", "Top 20% on the Verdad-style score, with a catalyst in the next 90 days. Sorted by score.",
       withNext(90).filter(([tk]) => isTop(tk)).sort((a,b) => T[b[0]].vscore.score - T[a[0]].vscore.score).slice(0,15),
-      [["Score", tk => scoreCell(tk)], ["Top-tier funds", tk => T[tk].tier1?.n ?? "—"], ["Runway", tk => runwayCell(tk)]].concat(VV ? [["His scan", tk => hisCell(tk) || "—"]] : [])]);
+      [["Score", tk => scoreCell(tk)], ["Funds (T1 / T2)", tk => T[tk].tier1 ? `${T[tk].tier1.n} / ${T[tk].tier1.n2 || 0}` : "—"], ["Runway", tk => runwayCell(tk)]].concat(VV ? [["His scan", tk => hisCell(tk) || "—"]] : [])]);
     S2.push(["Heavily shorted into a catalyst", "Short interest at or above 15% of float, with a catalyst inside 120 days. Treat as a risk list: in Verdad's research the most-shorted biotechs returned about −19% a year on average.",
       withNext(120).filter(([tk]) => (T[tk].short?.si_float||0) >= .15).sort((a,b) => T[b[0]].short.si_float - T[a[0]].short.si_float).slice(0,15),
       [["Short %", tk => pct(T[tk].short.si_float)], ["Days to cover", tk => T[tk].short.dtc?.toFixed(1) ?? "—"], ["Borrow fee", tk => T[tk].short.fee != null ? T[tk].short.fee.toFixed(1)+"%" : "—"]]]);

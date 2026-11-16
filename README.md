@@ -47,7 +47,7 @@ quarterly financials and 13F holdings are reused for 2 to 3 days. A normal refre
 ## Verdad-style score (built in)
 Every company gets a 0–100 score from the factors Verdad's "Biotech Investing" paper found predictive,
 recomputed on every refresh and live when a card opens:
-- **Top-tier specialist funds:** how many of the 26 tier-1 biotech funds hold it (share of stock breaks ties).
+- **Specialist funds:** the screener roster in `verdad_fund_ciks.py` (26 tier-1 funds at 100 points, 13 tier-2 at 40), matched to 13F holders by SEC filer ID (CIK); share of stock held breaks ties.
   Uses each fund's latest 13F, Q2 or Q3, so funds don't drop out during filing season.
 - **Short interest:** % of float (lower is better).
 - **Insider buying:** open-market Form 4 buys in 90 days, relative to market cap.

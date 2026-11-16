@@ -642,20 +642,44 @@ def latest_holdings(inst):
     return rows, max((x.get("report_date") or "" for x in rows), default=None)
 
 
+from verdad_fund_ciks import TIER1_FUNDS, TIER2_FUNDS   # the colleague's screener roster, matched by SEC filer ID
+
+_T1_CIK = {int(c): n for n, c in TIER1_FUNDS.items()}
+_T2_CIK = {int(c): n for n, c in TIER2_FUNDS.items()}
+W_TIER1, W_TIER2 = 100, 40   # his screener's points per fund
+
+
+def _cik(x):
+    try:
+        return int(x.get("cik") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def tier1_share(inst_rows, shares_out):
-    rows = [x for x in inst_rows if is_tier1(x.get("name"))]
-    units = sum(fnum(x.get("units")) or 0 for x in rows)
-    return {"pct": units / shares_out if shares_out else None, "n": len({(x.get("name") or "").lower() for x in rows}),
-            "funds": sorted({(x.get("name") or "").title() for x in rows})[:8]}
+    """Roster funds holding the stock, matched by 13F filer CIK (names fall back only when a row has no CIK)."""
+    t1, t2 = {}, {}
+    for x in inst_rows:
+        c = _cik(x)
+        if c in _T1_CIK:
+            t1[_T1_CIK[c]] = t1.get(_T1_CIK[c], 0) + (fnum(x.get("units")) or 0)
+        elif c in _T2_CIK:
+            t2[_T2_CIK[c]] = t2.get(_T2_CIK[c], 0) + (fnum(x.get("units")) or 0)
+        elif not c and is_tier1(x.get("name")):
+            nm = (x.get("name") or "").title()
+            t1[nm] = t1.get(nm, 0) + (fnum(x.get("units")) or 0)
+    units = sum(t1.values()) + sum(t2.values())
+    return {"pct": units / shares_out if shares_out else None, "n": len(t1), "n2": len(t2),
+            "funds": sorted(t1, key=lambda k: -t1[k]), "funds2": sorted(t2, key=lambda k: -t2[k])}
 
 
 def factor_values(mcap, si_float, buy_90d, se, spec):
     """Raw factor values, oriented so higher is better. None when the input is missing."""
     f = {}
     if spec and spec.get("n") is not None:
-        # Verdad: the strongest signal is several specialists owning the same stock. Count top-tier funds;
-        # the share of stock they hold only breaks ties.
-        f["spec"] = spec["n"] + min(spec.get("pct") or 0, 0.5)
+        # Verdad: the strongest signal is several specialists owning the same stock. Weight funds the way his
+        # screener does (100 per tier-1, 40 per tier-2); the share of stock they hold only breaks ties.
+        f["spec"] = W_TIER1 * spec["n"] + W_TIER2 * (spec.get("n2") or 0) + min(spec.get("pct") or 0, 0.5)
     if si_float is not None:
         f["short"] = -si_float
     if mcap:
@@ -953,7 +977,7 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
             out["runway"] = {k: rw.get(k) for k in ("months", "runs_out", "qtr_burn")} if rw else None
             out["value"] = spend_and_ev(fin, summ[tk]["mcap"])
             cur, _q = latest_holdings(inst_rows(tk))
-            out["tier1"] = tier1_share(cur, fnum(cur[0].get("shares_outstanding")) if cur else None) if cur else {"pct": 0.0, "n": 0, "funds": []}
+            out["tier1"] = tier1_share(cur, fnum(cur[0].get("shares_outstanding")) if cur else None) if cur else {"pct": 0.0, "n": 0, "n2": 0, "funds": [], "funds2": []}
             if exact:
                 out["implied"] = implied_move(tk, exact[0])
             cik = tmap.get(tk)
