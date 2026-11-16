@@ -77,10 +77,11 @@ def refresher():
             return
         state.update(running=True, msg="Starting refresh")
         try:
-            build.run(log=lambda m: state.update(msg=m))
+            build.run(log=lambda m: (state.update(msg=m), print(f"[refresh] {m}", flush=True)))
             state["last_err"] = None
         except Exception as ex:  # keep serving the last good snapshot
             state.update(last_err=f"{type(ex).__name__}: {ex}", failed_at=time.time())
+            print(f"[refresh] FAILED: {type(ex).__name__}: {ex}", flush=True)
         finally:
             state["running"] = False
             state["lock"].release()
