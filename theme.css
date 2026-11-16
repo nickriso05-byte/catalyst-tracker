@@ -1,0 +1,70 @@
+/* Catalyst Trader theme tokens
+   Extracted 2026-11-16 from my.paradigmpressgroup.com/subscription/rbc (computed styles).
+   Paradigm's fonts load from an Adobe Typekit kit (use.typekit.net/hrm2qck.css) that is
+   almost certainly locked to their domain, so off-site we fall back to the closest Google Fonts.
+   Embedded inside the Paradigm member site, the real fonts apply automatically. */
+
+/* Off-site fallback fonts (only needed outside paradigmpressgroup.com):
+   <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;700&family=Libre+Caslon+Text:wght@400;700&display=swap" rel="stylesheet"> */
+
+:root {
+  /* Type */
+  --ct-font-sans: sofia-pro, "Figtree", "Helvetica Neue", Helvetica, Arial, sans-serif;   /* body, UI, tables, section heads */
+  --ct-font-serif: adobe-caslon-pro, "Libre Caslon Text", Georgia, "Times New Roman", serif; /* article titles, publication banner */
+  --ct-size-body: 18px;      --ct-lh-body: 1.6;   /* 18 / 28.8 */
+  --ct-size-section: 36px;   /* "ALERTS" section heads: sans 700 uppercase */
+  --ct-size-title-lg: 30px;  /* lead card title: serif 700, lh 36px */
+  --ct-size-title-sm: 22px;  /* list card titles: serif 700 */
+  --ct-size-banner: 24px;    /* "RAY BLANCO'S CATALYST TRADER": serif 700 uppercase, white */
+
+  /* Brand colors */
+  --ct-black: #000000;        /* site header bar, table header row, body text */
+  --ct-page: #fefefe;         /* page + card background */
+  --ct-navy: #00263e;         /* section-head underline, primary button, Paradigm navy */
+  --ct-teal: #003e51;         /* Catalyst Trader color: date/author bars, publication banner */
+  --ct-orange: #cd4f17;       /* accent: ghost buttons ("READ MORE"), select borders */
+  --ct-grey-nav: #cdcdcd;     /* sub-nav bar ("MY SUBSCRIPTIONS") */
+  --ct-grey-text: #6a6a6a;    /* secondary text */
+  --ct-row-alt: #f1f1f1;      /* zebra table rows */
+  --ct-link: #0046c8;         /* ticker links in tables (underlined) */
+  --ct-gain: #008000;         /* positive % */
+  --ct-loss: #ff0000;         /* negative % */
+  --ct-badge: #e83a3a;        /* notification badge */
+  --ct-member-gold: #ffd700;  /* member-tier label in header */
+
+  /* Shape */
+  --ct-radius: 0;             /* everything is square-cornered */
+  --ct-border: 1.5px;
+  --ct-container: 1200px;     /* grid-container max-width, 20px side padding */
+}
+
+/* Component recipes observed on the member site */
+
+/* Section head, e.g. "ALERTS" / "PORTFOLIO" */
+.ct-section-head { font: 700 var(--ct-size-section)/1.2 var(--ct-font-sans); text-transform: uppercase;
+  padding-bottom: 9px; border-bottom: var(--ct-border) solid var(--ct-navy); margin: 0 0 18px; }
+
+/* Teal date/author bar above each card */
+.ct-meta-bar { background: var(--ct-teal); color: var(--ct-page); font: 500 14px/1.2 var(--ct-font-sans);
+  padding: 4px 12px; }
+
+/* Card title */
+.ct-card-title { font: 700 var(--ct-size-title-sm)/1.2 var(--ct-font-serif); color: var(--ct-black); }
+
+/* Ghost button ("READ MORE") */
+.ct-btn-ghost { border: var(--ct-border) solid var(--ct-orange); color: var(--ct-orange); background: transparent;
+  font: 700 16px/1 var(--ct-font-sans); text-transform: uppercase; padding: 8px 20px 12px; border-radius: 0; }
+
+/* Solid button ("CLOSED" toggle) */
+.ct-btn-solid { background: var(--ct-navy); border: var(--ct-border) solid var(--ct-navy); color: var(--ct-page);
+  font: 700 16px/1 var(--ct-font-sans); text-transform: uppercase; padding: 7px 18px 11px; border-radius: 0; }
+
+/* Data table (portfolio-table) */
+.ct-table { width: 100%; border-collapse: collapse; font: 400 16px/1.2 var(--ct-font-sans); }
+.ct-table thead tr { background: var(--ct-black); color: var(--ct-page); }
+.ct-table th { font-weight: 700; text-align: left; padding: 8px 18px 10px 10px; }
+.ct-table td { padding: 8px 10px 10px; }
+.ct-table tbody tr:nth-child(even) { background: var(--ct-row-alt); }
+.ct-table a { color: var(--ct-link); text-decoration: underline; }
+.ct-gain { color: var(--ct-gain); }
+.ct-loss { color: var(--ct-loss); }

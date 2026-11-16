@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+.secrets.toml
+cache/
+public/
+build.log
+*.tmp
+NOTES.md
