@@ -31,7 +31,6 @@ st.html("""<style>
 .block-container, [data-testid="stMainBlockContainer"] { padding: 0 !important; max-width: none !important; }
 [data-testid="stVerticalBlock"] { gap: 0 !important; }
 </style>""")
-gate.require()
 
 # --------------------------------------------------------------------------- scheduled refresh
 
@@ -100,7 +99,8 @@ def refresher():
     return state
 
 
-R = refresher()
+R = refresher()     # starts the background refresh even while the login screen is up
+gate.require()
 
 # --------------------------------------------------------------------------- data
 
