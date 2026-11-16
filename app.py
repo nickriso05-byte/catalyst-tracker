@@ -23,7 +23,7 @@ import gate
 
 st.set_page_config(page_title="FDA Catalyst Tracker", page_icon="💊", layout="wide")
 st.html(card.CSS + """<style>
-.block-container{padding-top:1rem;max-width:1280px}
+.block-container{padding-top:3rem;max-width:1280px}
 [data-testid="stHeader"]{background:transparent;height:0}
 div[data-testid="stDialog"] div[role="dialog"]{width:min(1000px,96vw)}
 </style>""")
@@ -280,12 +280,12 @@ def table_select(df, key, tickers):
 
 
 COLS = {
-    "When": st.column_config.TextColumn("When", width="small"),
+    "When": st.column_config.TextColumn("When", width="medium"),
     "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-    "Mkt cap $M": st.column_config.NumberColumn("Mkt cap", format="$%.0fM"),
+    "Mkt cap $B": st.column_config.NumberColumn("Mkt cap", format="$%.2fB"),
     "Short % float": st.column_config.NumberColumn("Short % float", format="%.1f%%"),
     "Runway (mo)": st.column_config.NumberColumn("Cash runway", format="%.0f mo", help="Estimated months of cash left at the current burn rate"),
-    "Cash short?": st.column_config.CheckboxColumn("Cash out before event?", help="Estimated cash runs out before the catalyst window closes"),
+    "Cash short?": st.column_config.TextColumn("Cash out before event?", help="Estimated cash runs out before the catalyst window closes"),
     "Implied ±%": st.column_config.NumberColumn("Implied move", format="±%.0f%%", help="Options-implied move to the first expiry after an exact-date catalyst"),
 }
 
@@ -324,11 +324,13 @@ if D:
             "When": e["label"] + (f" ({card.countdown(e, today)})" if e["precision"] == "day" else ""),
             "Ticker": e["ticker"], "Company": (D["tickers"].get(e["ticker"]) or {}).get("name") or e.get("company"),
             "Event": e["type"], "Drug / program": e.get("drug") or "",
-            "Mkt cap $M": ((D["tickers"].get(e["ticker"]) or {}).get("mcap") or 0) / 1e6 or None,
+            "Mkt cap $B": ((D["tickers"].get(e["ticker"]) or {}).get("mcap") or 0) / 1e9 or None,
             "Short % float": (((D["tickers"].get(e["ticker"]) or {}).get("short") or {}).get("si_float") or 0) * 100 or None,
-            "Runway (mo)": runway_months(e["ticker"]), "Cash short?": cash_before(e["ticker"], e),
+            "Runway (mo)": runway_months(e["ticker"]), "Cash short?": "⚠ Yes" if cash_before(e["ticker"], e) else "",
             "Implied ±%": implied_for(e["ticker"], e), "Signals": signals(e["ticker"], e)} for e in rows])
         if len(df):
+            for c in ("Mkt cap $B", "Short % float", "Runway (mo)", "Implied ±%"):
+                df[c] = pd.to_numeric(df[c], errors="coerce")
             table_select(df, "cal", [e["ticker"] for e in rows])
         else:
             st.info("No catalysts match these filters.")

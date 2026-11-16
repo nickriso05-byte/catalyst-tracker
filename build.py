@@ -244,7 +244,7 @@ KEYPOS = re.compile(r"PDUFA|target action date|goal date|advisory committee|top[
 
 DRUG_CODE = re.compile(r"\b(?!COVID-|EX-|FORM|ITEM|RULE|SECTION|NASDAQ|NYSE|CIK|CUSIP|IL-|HPV-|CD-|ICD-|ISO-|GAAP)[A-Z]{2,6}-\d{2,6}[A-Za-z]?\b")
 DRUG_INN = re.compile(r"\b[a-z]{3,}(?:mab|nib|cel|stat|stim|tide|vir|parin|gene|sertib|ciclib|lisib|zomib|platin|rsen|siran|cept|glutide|tecan|leucel|temcel|vec|dagene|vimab|ximab|zumab|umab|lintide|igine|azine|olol|pril|sartan|fungin|cycline|mycin|oxacin|dronate|pam|lam|zolam|tinib|rafenib|parib|degib|lukast|semide|thiazide|bart|plirsen|virsen|amide)\b", re.I)
-STOP_INN = {"program", "random", "medicine", "examine", "determine", "statement", "outcome", "become", "data", "submitted"}
+STOP_INN = {"concept", "except", "accept", "intercept", "precept", "program", "random", "medicine", "examine", "determine", "statement", "outcome", "become", "data", "submitted"}
 
 
 DRUG_SHORT = re.compile(r"\b[a-z]{2,6}-(?:cel|vec|gal|cept)\b")   # tab-cel, bota-vec, …
@@ -473,9 +473,13 @@ def merge_events(sec_raw, uw_events):
             seen[k] = {**ev, "ticker": tk, "company": hit["company"], "cik": hit["cik"], "sources": [src]}
         cur_events = list(seen.values())
         # Date changed vs an older filing? (only when the newest filing gives one date)
-        if len(cur_events) == 1:
-            older = [ev for h, ev in items if h["date"] < newest and ev["label"] != cur_events[0]["label"]
-                     and PREC_RANK[ev["precision"]] <= PREC_RANK[cur_events[0]["precision"]]]
+        # Only trusted when the drug is known and the old date is close (a lease or loan date isn't a moved PDUFA).
+        if len(cur_events) == 1 and drug != "?":
+            c0 = cur_events[0]
+            older = [ev for h, ev in items if h["date"] < newest and ev["label"] != c0["label"]
+                     and PREC_RANK[ev["precision"]] <= PREC_RANK[c0["precision"]]
+                     and abs((date.fromisoformat(ev["start"]) - date.fromisoformat(c0["start"])).days) <= 270
+                     and (ev["end"] < c0["start"] or ev["start"] > c0["end"])]   # a real change, not "Late 2026" vs "H2 2026"
             if older:
                 prev = older[0]
                 cur_events[0]["was"] = prev["label"]
@@ -512,6 +516,10 @@ def merge_events(sec_raw, uw_events):
                 twin["indication"] = e["indication"]
             continue
         kept.append(e)
+    # An "old" date that is another of the company's current events belongs to that other program, not a move.
+    for e in kept:
+        if e.get("was") and any(k is not e and k["ticker"] == e["ticker"] and k["label"] == e["was"] for k in kept):
+            e.pop("was", None); e.pop("moved", None)
     kept.sort(key=lambda e: (e["end"], PREC_RANK[e["precision"]], e["label"], e["start"], e["ticker"]))
     return kept
 
@@ -703,9 +711,16 @@ def _auth():
         _uw.headers.update({"Authorization": f"Bearer {uw_token()}", "Accept": "application/json"})
 
 
+def _sec_tickers():
+    return (sec_get("https://www.sec.gov/files/company_tickers.json", as_json=True, ttl=24) or {}).values()
+
+
 def cik_map():
-    tj = sec_get("https://www.sec.gov/files/company_tickers.json", as_json=True, ttl=24) or {}
-    return {v["ticker"].upper(): v["cik_str"] for v in tj.values()}
+    return {v["ticker"].upper(): v["cik_str"] for v in _sec_tickers()}
+
+
+def sec_names():
+    return {v["ticker"].upper(): v["title"] for v in _sec_tickers()}
 
 
 def run(quick=False, days=150, min_mcap=25e6, all_cards=False, log=print):
@@ -739,6 +754,11 @@ def run(quick=False, days=150, min_mcap=25e6, all_cards=False, log=print):
     log("4/5 Healthcare universe")
     uni = healthcare_universe(min_mcap)
     tmap = cik_map()
+    names = dict(uni)
+    for e in events:
+        names.setdefault(e["ticker"], e.get("company"))
+    events, n_drop = drop_third_party(events, names)
+    log(f"4/5 Dropped {n_drop} events that quote another company's catalyst")
     tickers = sorted({e["ticker"] for e in events} | (set(uni) if all_cards else set()))
 
     log(f"5/5 Company data for {len(tickers)} names")
@@ -848,6 +868,51 @@ def main():
     run(a.quick, a.days, a.min_mcap, a.all_cards)
 
 
+GENERIC_FIRST = {"united", "american", "national", "global", "medical", "health", "healthcare", "pharma", "applied", "advanced",
+                 "precision", "clinical", "international", "general", "first", "biotech", "bio", "the", "new", "life", "cell",
+                 "gene", "therapeutics", "pharmaceuticals", "biosciences", "biopharma", "sciences", "group", "holdings", "capital",
+                 "innovative", "integrated", "regional", "select", "universal", "pacific", "atlantic", "north", "south", "west", "east",
+                 "community", "premier", "alpha", "beta", "omega", "nova", "vital", "standard", "focus", "summit", "harbor", "frontier"}
+PARTNER = re.compile(r"\bpartner|collaborat|\blicens(?:ed|ee|ees|ing|or)\b|co-develop|agreement with|our (?:program|product|candidate)", re.I)
+
+
+def core_name(full: str):
+    """'CAPRICOR THERAPEUTICS, INC.' -> 'Capricor'; 'ZAI LAB LTD' -> 'Zai Lab'. None when too generic to match safely."""
+    words = re.findall(r"[A-Za-z][A-Za-z0-9&'.-]*", full or "")
+    if not words:
+        return None
+    w0 = words[0].strip(".").title()
+    if len(w0) >= 5 and w0.lower() not in GENERIC_FIRST:
+        return w0
+    if len(words) > 1 and w0.lower() not in GENERIC_FIRST and len(w0) >= 2:
+        two = f"{w0} {words[1].strip('.').title()}"
+        if words[1].lower() not in ("inc", "corp", "co", "ltd", "plc", "sa", "ag", "nv", "llc"):
+            return two
+    return None
+
+
+def drop_third_party(events, names: dict):
+    """Companies often quote a competitor's PDUFA date in their own filings. If the quote names another
+    tracked company and not the filer (and isn't about a partnership), the event isn't the filer's."""
+    cores = {}
+    for tk, nm in names.items():
+        c = core_name(nm)
+        if c:
+            cores.setdefault(c, set()).add(tk)
+    rx = re.compile(r"\b(" + "|".join(re.escape(c) for c in sorted(cores, key=len, reverse=True)) + r")\b") if cores else None
+    kept, dropped = [], 0
+    for e in events:
+        q = e.get("quote") or ""
+        own = {core_name(names.get(e["ticker"]) or ""), core_name(e.get("company") or "")} - {None}
+        others = {m.group(1) for m in rx.finditer(q)} - own if rx else set()
+        others = {o for o in others if e["ticker"] not in cores.get(o, set())}
+        if others and not any(o in q for o in own) and not PARTNER.search(q):
+            dropped += 1
+            continue
+        kept.append(e)
+    return kept, dropped
+
+
 def summary(r):
     """The few fields the calendar, screens and search need; everything else lives in t/<TICKER>.json."""
     d90 = (TODAY - timedelta(days=90)).isoformat()
@@ -871,8 +936,9 @@ def healthcare_universe(min_mcap: float):
             q["offset"] = page
         batch = (uw_get("/api/screener/stocks", q, ttl=12) or {}).get("data") or []
         fresh = [b for b in batch if b.get("ticker") and b["ticker"] not in seen]
+        names = sec_names()
         for b in fresh:
-            seen.add(b["ticker"]); rows[b["ticker"]] = b.get("full_name")
+            seen.add(b["ticker"]); rows[b["ticker"]] = b.get("full_name") or names.get(b["ticker"].upper())
         if len(batch) < 50 or not fresh:
             break
         page += 1
