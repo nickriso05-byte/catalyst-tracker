@@ -1,0 +1,39 @@
+Labeled FDA decisions with company-filing signals: 697 (was 566; 140 added from FDA records)
+Label check where both sources label the same decision: 152 agree, 9 disagree (94% agreement); conflicts are dropped
+Linked to a pivotal trial on ClinicalTrials.gov: 142
+
+Train <2021: 403 (approved 75.4%)   Test 2021+: 294 (approved 83.7%)   L2=100
+  FDA-records prior alone   AUC 0.669   Brier 0.1374
+  AUC        model 0.669   baseline 0.500
+  Brier      model 0.1297   baseline 0.1434
+  Log loss   model 0.4212   baseline 0.4651
+  Lowest-odds 20%   predicted 66.6%   actual 70.7%   (n=58)
+  Middle 60%        predicted 81.2%   actual 83.7%   (n=178)
+  Highest-odds 20%  predicted 90.6%   actual 96.6%   (n=58)
+  Calibration (predicted vs actual, test):
+    0%-70%: predicted 62.1%  actual 67.7%  n=31
+    70%-80%: predicted 75.6%  actual 81.8%  n=99
+    80%-90%: predicted 84.9%  actual 85.2%  n=128
+    90%-100%: predicted 91.8%  actual 97.2%  n=36
+
+Inputs that move FDA-decision odds most (standardized weight):
+  adcom_planned              -0.14
+  sponsor_log_approvals      +0.14
+  l1_logit                   +0.13
+  nda_505b2                  -0.13
+  sponsor_has_approval       +0.12
+  bla                        +0.10
+  manufacturing              -0.10
+  supplemental               +0.09
+  rtor_or_voucher            +0.07
+  piv_ep_symptom             -0.07
+  extended                   +0.07
+  orphan                     +0.06
+  piv_phase3                 -0.05
+  adcom_none                 +0.05
+  breakthrough               +0.05
+  piv_single_arm             -0.05
+  fast_track                 -0.05
+  piv_ep_response            -0.04
+  partnered                  -0.04
+  piv_ep_biomarker           +0.04

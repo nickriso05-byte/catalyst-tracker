@@ -975,6 +975,15 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
         b = baseline_odds(e)
         if b:
             e["base"] = {**b, "source": BASE_SOURCE}
+    # Keep the last refresh's model odds until this refresh re-scores them, so the calendar never drops back to averages.
+    okey = lambda e: (e["ticker"], e["type"], e["start"], e.get("drug"))
+    try:
+        prev = {okey(e): e["odds"] for e in json.loads(OUT.read_text(encoding="utf-8")).get("events", []) if e.get("odds")}
+    except Exception:
+        prev = {}
+    for e in events:
+        if okey(e) in prev:
+            e["odds"] = prev[okey(e)]
     universe = {tk: (r["name"] or "").title() for tk, r in sorted(uni.items())}
     score_dist = {}
 
@@ -1059,6 +1068,28 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
                 saved += 1
             if i % 100 == 0:
                 log(f"Company cards: {i}/{len(tickers)}")
+
+    # Model odds: FDA decisions (approval odds) and trial readouts (success odds), per event.
+    # Inputs come from the company's filings and ClinicalTrials.gov, all cached, so later refreshes are quick.
+    try:
+        import odds_score
+        todo = [e for e in events if e["end"] >= TODAY.isoformat() and e["type"] in ("PDUFA date", "Advisory committee", "Data readout")]
+
+        def odds_job(e):
+            return e, odds_score.score_event(e, summ[e["ticker"]]["name"], tmap.get(e["ticker"]))
+        n_odds = 0
+        with ThreadPoolExecutor(10) as pool:
+            for i, f in enumerate(as_completed([pool.submit(odds_job, e) for e in todo]), 1):
+                e, o = f.result()
+                if o:
+                    e["odds"] = o; n_odds += 1
+                if i % 50 == 0:
+                    log(f"Model odds: {i}/{len(todo)}")
+        write("complete")
+        log(f"Model odds for {n_odds} of {len(todo)} events ({time.time() - t0:.0f}s)")
+    except Exception as ex:   # odds are an extra: never let them stop the refresh
+        log(f"   ! model odds skipped: {ex}")
+
     stats = {"events": len(events), "companies": len(tickers), "cards": saved, "universe": len(universe), "seconds": round(time.time() - t0)}
     log(f"Done: {stats}")
     return stats

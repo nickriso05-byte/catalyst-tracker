@@ -12,3 +12,5 @@ NOTES.md
 verdad/*.csv
 odds/cto/
 odds/*.log
+odds/*.jsonl
+odds/*.csv

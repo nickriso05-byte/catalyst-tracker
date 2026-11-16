@@ -1,0 +1,34 @@
+Decisions labeled: 566  (train <2020-01-01: 303, test: 263)
+Approval rate: train 72.3%, test 80.2%
+Regularization L2 = 30
+
+Backtest on the test years (model never saw them):
+  AUC        model 0.621   baseline 0.500
+  Brier      model 0.1538   baseline 0.1649
+  Log loss   model 0.4844   baseline 0.5141
+  Lowest-odds 20%   predicted 62.6%   actual 67.3%   (n=52)
+  Middle 60%        predicted 81.0%   actual 82.4%   (n=159)
+  Highest-odds 20%  predicted 92.9%   actual 86.5%   (n=52)
+
+What moves the odds (standardized weight; + raises approval odds, - lowers):
+  adcom_planned                -0.24
+  nda_505b2                    -0.20
+  sponsor_prior_approvals_log  +0.18
+  breakthrough                 +0.18
+  sponsor_has_approval         +0.18
+  extended                     +0.13
+  supplemental                 +0.12
+  prior_crl                    -0.11
+  rtor_or_voucher              +0.11
+  partnered                    -0.10
+  priority_review              -0.10
+  manufacturing                -0.09
+  orphan                       +0.08
+  adcom_negative               +0.07
+  bla                          +0.06
+  adcom_none                   +0.05
+  accelerated                  -0.04
+  fast_track                   -0.04
+  adcom_positive               +0.03
+  resubmission                 -0.03
+  label_talks                  -0.02

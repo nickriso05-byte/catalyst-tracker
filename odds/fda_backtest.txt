@@ -1,0 +1,19 @@
+LAYER 1 (FDA records): 4,352 decisions since 2016, 3,944 approvals / 408 CRLs
+  train <2023: 2,724 (approved 91.9%)   test 2023+: 1,628 (approved 88.5%)
+  AUC        model 0.558   baseline 0.500
+  Brier      model 0.1195   baseline 0.1033
+  Log loss   model 0.5091   baseline 0.3651
+  Lowest-odds 20%   predicted 75.5%   actual 92.3%   (n=325)
+  Middle 60%        predicted 96.1%   actual 84.3%   (n=978)
+  Highest-odds 20%  predicted 99.5%   actual 97.2%   (n=325)
+  weights: supplemental +1.38, resubmission -0.29, sponsor_log_approvals +0.20, onc +0.20, sponsor_has_approval +0.13, bla -0.09
+
+LAYER 2 (+ company filings): 566 decisions with SEC history; train <2021: 349, test 2021+: 217 (approved 81.6%)
+  Layer 1 alone on this test set:  AUC 0.617   Brier 0.1559
+  AUC        model 0.570   baseline 0.500
+  Brier      model 0.1532   baseline 0.1586
+  Log loss   model 0.4914   baseline 0.5003
+  Lowest-odds 20%   predicted 56.6%   actual 67.4%   (n=43)
+  Middle 60%        predicted 79.7%   actual 87.0%   (n=131)
+  Highest-odds 20%  predicted 93.2%   actual 79.1%   (n=43)
+  top weights: l1_logit +0.42, adcom_planned -0.32, nda_505b2 -0.25, rtor_or_voucher +0.22, extended +0.21, manufacturing -0.18, breakthrough +0.17, adcom_none +0.15, priority_review -0.14, fast_track -0.10, accelerated -0.10, adcom_negative +0.09

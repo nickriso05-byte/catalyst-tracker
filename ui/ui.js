@@ -77,6 +77,23 @@ export default function (component) {
     const bar = opt.bar != null ? `<span class="bar"><i style="--w:${Math.max(4, Math.min(100, opt.bar))}%;--bc:${opt.bc || "var(--teal2)"}"></i></span>` : "";
     return `<div class="mt"><span class="k">${k}</span><span class="v ${cls}">${v ?? "—"}</span>${bar}</div>`;
   }
+  // Model odds when the catalyst could be tied to the model's inputs, otherwise the industry average for its stage.
+  const oddsOf = e => e.odds ? {p: e.odds.p, model: true} : (e.base ? {p: e.base.p, model: false} : null);
+  function oddsHtml(e){
+    const o = e.odds, b = e.base;
+    if (!o) return b ? `<span class="pill odds" title="${esc(b.source)}. Not drug-specific.">Historically ${Math.round(b.p*100)}% ${esc(b.what)}</span>` : "";
+    const what = o.kind === "fda" ? "odds of approval" : "odds the trial succeeds";
+    let h = `<span class="pill odds model" title="${esc(o.basis)}">Model: ${Math.round(o.p*100)}% ${what}</span>`;
+    if (b) h += `<span class="pill" title="${esc(b.source)}">Industry average ${Math.round(b.p*100)}%</span>`;
+    return h;
+  }
+  function driversHtml(e){
+    const o = e.odds;
+    if (!o || !(o.drivers || []).length) return "";
+    const trial = o.nct ? `<a href="https://clinicaltrials.gov/study/${esc(o.nct)}" target="_blank" rel="noopener">${esc(o.nct)}${o.phase ? " · " + esc(o.phase) : ""}</a>` : "";
+    return `<div class="drivers"><span class="dk">What moves these odds${trial ? " · trial " + trial : ""}</span>` +
+      o.drivers.map(([l, w]) => `<span class="drv ${w >= 0 ? "up" : "dn"}">${w >= 0 ? "▲" : "▼"} ${esc(l)}</span>`).join("") + `</div>`;
+  }
   function evCard(e){
     const t = T[e.ticker] || {}, c = TYPEC[e.type] || "#4a5a68";
     const dt = e.precision === "day" ? new Date(e.start + "T00:00:00") : null;
@@ -94,7 +111,7 @@ export default function (component) {
         ${cdn ? `<span class="cd ${n <= 7 ? "soon" : ""}">${cdn}</span>` : ""}</div>
       <div class="drug">${drug.length ? esc(drug[0]) + (drug[1] ? ` <em>· ${esc(drug[1])}</em>` : "") : `<em>${esc(e.type)}</em>`}</div>
       <div class="metrics">
-        ${metric("Hist. odds", e.base ? Math.round(e.base.p*100) + "%" : null, {bar: e.base ? e.base.p*100 : null})}
+        ${(() => { const o = oddsOf(e); return metric(o && o.model ? "Model odds" : "Hist. odds", o ? Math.round(o.p*100) + "%" : null, {bar: o ? o.p*100 : null, bc: o && o.model ? "var(--teal)" : "#9fb3bf"}); })()}
         ${metric("Score", v ? v.score : null, {bar: v ? v.score : null, bc: v && isTop(e.ticker) ? "var(--good)" : "var(--teal2)"})}
         ${metric("Implied move", im != null ? "±" + Math.round(im*100) + "%" : null)}
         ${metric("Mkt cap", money(t.mcap))}
@@ -121,7 +138,7 @@ export default function (component) {
     $("#calcount").textContent = `${rows.length} events · ${new Set(rows.map(e=>e.ticker)).size} companies`;
     if (!rows.length){ $("#groups").innerHTML = `<div class="empty">No catalysts match these filters.</div>`; return; }
     if (sort !== "date"){
-      const key = { score: e => -(T[e.ticker]?.vscore?.score ?? -1), implied: e => -(impliedFor(e.ticker, e) ?? -1), short: e => -(T[e.ticker]?.short?.si_float ?? -1) }[sort];
+      const key = { odds: e => -(e.odds?.p ?? -1), score: e => -(T[e.ticker]?.vscore?.score ?? -1), implied: e => -(impliedFor(e.ticker, e) ?? -1), short: e => -(T[e.ticker]?.short?.si_float ?? -1) }[sort];
       const list = rows.slice().sort((a,b) => key(a) - key(b) || a.end.localeCompare(b.end)).slice(0, 120);
       $("#groups").innerHTML = `<div class="group"><div class="grid">${list.map(evCard).join("")}</div></div>`;
       return;
@@ -267,8 +284,9 @@ export default function (component) {
       `<div class="muted">No upcoming FDA date, data readout or submission in this company's SEC filings from the last 5 months.${t.next_earnings ? ` Next earnings: ${esc(fdate(t.next_earnings))}.` : ""}</div>`) +
       evs.map(e => `<div class="cat" style="--c:${TYPEC[e.type] || "#4a5a68"}">
         <div class="t">${esc(e.label)} · ${esc(e.type)}${e.drug ? " · " + esc(e.drug) : ""} <span>${countdown(e)}</span>${e.new ? ' <span class="tag new">New filing</span>' : ""}</div>
-        <div class="meta">${e.base ? `<span class="pill odds" title="${esc(e.base.source)}. Not drug-specific.">Historically ${Math.round(e.base.p*100)}% ${esc(e.base.what)}</span>` : ""}
+        <div class="meta">${oddsHtml(e)}
           ${e.indication ? `<span class="pill">${esc(e.indication)}</span>` : ""}${e.was ? `<span class="pill">Moved ${esc(e.moved)} · was ${esc(e.was)}</span>` : ""}</div>
+        ${driversHtml(e)}
         ${e.quote ? `<blockquote>“${esc(e.quote)}”</blockquote>` : ""}
         <div class="src">Source: ${(e.sources||[]).map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.kind)} ${esc(fdate(s.date))}</a>`).join(" · ")}</div></div>`).join("") + `</div>`;
     html += scoreBox(t);
@@ -316,7 +334,7 @@ export default function (component) {
         t.dilution.map(x => `<div style="margin-bottom:4px"><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.form)}</a> · ${esc(fdate(x.date))} <span class="muted">${/^424B/.test(x.form) ? "prospectus for a sale of shares" : "shelf registration"}</span></div>`).join("") + `</div>`;
     }
     html += hisBox(tk);
-    html += `<div class="cfoot">Sources: company SEC filings (catalyst dates, 13D/13G, share-sale filings), Unusual Whales (prices, options, FINRA short interest, Form 4 insider trades, 13F holders, financials). Historical odds are industry averages by stage (BIO/Informa 2011–2020), not drug-specific. Catalyst dates are read automatically from filings, so check the quote. Information only, not investment advice.</div></div>`;
+    html += `<div class="cfoot">Sources: company SEC filings (catalyst dates, 13D/13G, share-sale filings), Unusual Whales (prices, options, FINRA short interest, Form 4 insider trades, 13F holders, financials). Model odds come from our backtested models (FDA approvals and rejection letters since 2016, company filings, and 100,000+ ClinicalTrials.gov trials); where a catalyst can't be tied to a trial, the industry average by stage (BIO/Informa 2011–2020) is shown instead. Odds are estimates, not predictions. Catalyst dates are read automatically from filings, so check the quote. Information only, not investment advice.</div></div>`;
     return html;
   }
 
@@ -380,7 +398,7 @@ export default function (component) {
   const busy = D.phase === "calendar" ? " · adding runway, implied moves, 13D/13G…" : (S.data.refreshing ? " · refreshing…" : "");
   $("#stamp").textContent = "Updated " + gen.toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) + busy;
   $("#refresh").disabled = !!S.data.refreshing;
-  $("#foot").textContent = "Catalyst dates come from companies' own SEC filings and press releases, read automatically; open a company to see the exact quote and link. Short interest is reported by FINRA twice a month. Cash runway is an estimate from the latest quarter. Historical odds are industry averages by stage (BIO/Informa 2011–2020), not drug-specific. Information only, not investment advice.";
+  $("#foot").textContent = "Catalyst dates come from companies' own SEC filings and press releases, read automatically; open a company to see the exact quote and link. Short interest is reported by FINRA twice a month. Cash runway is an estimate from the latest quarter. Model odds are estimates from backtested models; “Hist. odds” are industry averages by stage (BIO/Informa 2011–2020), not drug-specific. Information only, not investment advice.";
   const snapKey = D.generated_at + "|" + D.phase + "|" + D.events.length + "|" + (VV ? VV.n : 0);
   if (S.snapKey !== snapKey){
     D.events.sort((a,b) => a.end.localeCompare(b.end) || PR[a.precision]-PR[b.precision] || a.label.localeCompare(b.label) || a.start.localeCompare(b.start) || a.ticker.localeCompare(b.ticker));
