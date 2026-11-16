@@ -77,7 +77,7 @@ class RateLimiter:
 
 
 SEC_RL = RateLimiter(7)      # SEC allows 10/s in total
-UW_RL = RateLimiter(7)
+UW_RL = RateLimiter(10)
 # Live card lookups get their own budget, so a running refresh never makes a click wait.
 SEC_RL_LIVE = RateLimiter(3)
 UW_RL_LIVE = RateLimiter(4)
@@ -340,9 +340,23 @@ FTS_QUERIES = ['"PDUFA"', '"target action date"', '"topline data"', '"top-line d
 FTS_FORMS = "8-K,10-Q,10-K,6-K,20-F"
 
 
+HITS_FILE = CACHE / "docs" / "_hits.json"
+
+
 def fts_hits(days: int, max_per_query: int):
-    start = (TODAY - timedelta(days=days)).isoformat()
-    hits = {}
+    """Filings that mention catalyst phrases. The list from the last run is saved next to the sentence cache,
+    so normally only the last few days are searched again."""
+    window_start = (TODAY - timedelta(days=days)).isoformat()
+    try:
+        saved = {h["id"]: h for h in json.loads(HITS_FILE.read_text(encoding="utf-8")) if (h.get("date") or "") >= window_start}
+    except Exception:
+        saved = {}
+    newest = max((h["date"] for h in saved.values() if h.get("date")), default=None)
+    if newest and newest >= (TODAY - timedelta(days=30)).isoformat():
+        start = (date.fromisoformat(newest) - timedelta(days=3)).isoformat()
+    else:
+        start, saved = window_start, {}
+    hits = dict(saved)
     for q in FTS_QUERIES:
         off = 0
         while off < max_per_query:
@@ -368,7 +382,7 @@ def fts_hits(days: int, max_per_query: int):
             off += 100
             if off >= total or not page:
                 break
-        print(f"  search {q:<26} total so far {len(hits)}")
+    HITS_FILE.write_text(json.dumps(sorted(hits.values(), key=lambda h: h["id"]), separators=(",", ":")), encoding="utf-8")
     return list(hits.values())
 
 
@@ -723,86 +737,209 @@ def sec_names():
     return {v["ticker"].upper(): v["title"] for v in _sec_tickers()}
 
 
-def run(quick=False, days=150, min_mcap=25e6, all_cards=False, log=print):
-    """Full refresh. Writes public/data.json (+ public/t/<TICKER>.json cards). Returns a short stats dict.
-    all_cards=False pre-builds cards only for names with a catalyst (the app builds other cards live on click)."""
+def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
+    """Full refresh, written in two passes so the calendar shows fast on a cold server:
+      pass 1 (seconds): catalysts + market cap, short interest and insider buys from bulk calls -> data.json
+      pass 2 (about a minute): cash runway, implied moves, 13D/13G and share-sale filings per company -> data.json
+    Company cards themselves are built live in the app when opened."""
     global TODAY
     TODAY = date.today()
     _auth()
     t0 = time.time()
 
-    log("1/5 Searching SEC filings")
+    log("Searching SEC filings")
     hits = fts_hits(days, 300 if quick else 2000)
     hits.sort(key=lambda h: h["date"] or "", reverse=True)
     if quick:
         hits = hits[:150]
-
-    log(f"2/5 Reading {len(hits)} filings")
+    cached = sum(1 for h in hits if (CACHE / "docs" / (re.sub(r"[^A-Za-z0-9_.-]", "_", h["id"]) + ".json")).exists())
+    log(f"Reading {len(hits)} filings ({len(hits) - cached} new)")
     sec_raw, done = [], 0
-    with ThreadPoolExecutor(6) as pool:
+    with ThreadPoolExecutor(8) as pool:
         futs = {pool.submit(load_doc_events, h): h for h in hits}
         for f in as_completed(futs):
             h = futs[f]; done += 1
             for ev in f.result() or []:
                 sec_raw.append((h, ev))
             if done % 250 == 0:
-                log(f"2/5 Reading filings: {done}/{len(hits)}")
+                log(f"Reading filings: {done}/{len(hits)}")
 
-    log("3/5 FDA calendar feed")
+    log("FDA calendar feed and healthcare universe")
     events = merge_events(sec_raw, uw_fda_events())
-
-    log("4/5 Healthcare universe")
-    uni = healthcare_universe(min_mcap)
-    tmap = cik_map()
-    names = dict(uni)
+    uni = healthcare_rows(min_mcap)
+    names = {tk: r["name"] for tk, r in uni.items()}
     for e in events:
         names.setdefault(e["ticker"], e.get("company"))
     events, n_drop = drop_third_party(events, names)
-    log(f"4/5 Dropped {n_drop} events that quote another company's catalyst")
-    tickers = sorted({e["ticker"] for e in events} | (set(uni) if all_cards else set()))
+    # The UW screener misses some healthcare names (e.g. recent IPOs), so check the rest one by one (cached a day).
+    missing = sorted({e["ticker"] for e in events} - set(uni))
+    with ThreadPoolExecutor(10) as pool:
+        for tk, info in zip(missing, pool.map(lambda t: (uw_get(f"/api/stock/{t}/info", ttl=24) or {}).get("data") or {}, missing)):
+            if (info.get("sector") or "") == "Healthcare" and (fnum(info.get("marketcap")) or 0) >= min_mcap:
+                uni[tk] = {"name": info.get("full_name") or names.get(tk), "mcap": fnum(info.get("marketcap"))}
+    events = [e for e in events if e["ticker"] in uni]          # healthcare, above the size floor
+    tickers = sorted({e["ticker"] for e in events})
 
-    log(f"5/5 Company data for {len(tickers)} names")
-    data = {}
-    def job(tk):
-        exact = sorted(e["start"] for e in events if e["ticker"] == tk and e["precision"] == "day" and e["start"] >= TODAY.isoformat())
-        cik = next((e.get("cik") for e in events if e["ticker"] == tk and e.get("cik")), None) or tmap.get(tk)
-        try:
-            return tk, enrich(tk, cik, exact[0] if exact else None)
-        except Exception as ex:  # one bad ticker must not stop the build
-            log(f"   ! {tk}: {ex}")
-            return tk, None
-    with ThreadPoolExecutor(8) as pool:
-        for i, f in enumerate(as_completed([pool.submit(job, t) for t in tickers]), 1):
-            tk, r = f.result()
-            if r:
-                data[tk] = r
-            if i % 50 == 0:
-                log(f"5/5 Company data: {i}/{len(tickers)}")
-    events = [e for e in events if e["ticker"] in data]
+    # ---- pass 1: bulk numbers
+    log(f"Bulk data for {len(tickers)} companies")
+    summ = {tk: {"name": (uni[tk]["name"] or tk).title(), "mcap": uni[tk]["mcap"], "short": None, "runway": None, "implied": None,
+                 "insiders": {"buy_90d": 0, "buyers_90d": 0}, "stakes": [], "dilution": []} for tk in tickers}
+    for tk, s in bulk_short(tickers).items():
+        summ[tk]["short"] = s
+    for tk, b in bulk_insider_buys(tickers).items():
+        summ[tk]["insiders"] = b
     for e in events:
         e.pop("cik", None)
-        e.setdefault("company", data[e["ticker"]]["name"])
+        e["company"] = summ[e["ticker"]]["name"]
+    universe = {tk: (r["name"] or "").title() for tk, r in sorted(uni.items())}
 
-    tdir = OUT.parent / "t"
-    tdir.mkdir(parents=True, exist_ok=True)
-    for old in tdir.glob("*.json"):
-        if old.stem not in data:
-            old.unlink()
-    for tk, r in data.items():
-        (tdir / f"{tk}.json").write_text(json.dumps(r, separators=(",", ":"), default=str), encoding="utf-8")
-    universe = {tk: nm for tk, nm in uni.items()}
-    for tk, r in data.items():
-        universe.setdefault(tk, r.get("name"))
-    payload = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "today": TODAY.isoformat(),
-               "events": events, "tickers": {tk: summary(r) for tk, r in data.items()},
-               "universe": {tk: (nm or "").title() for tk, nm in sorted(universe.items())},
-               "notes": {"filings_window_days": days, "filings_read": len(hits), "universe_min_mcap": min_mcap}}
-    tmp = OUT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, separators=(",", ":"), default=str), encoding="utf-8")
-    tmp.replace(OUT)   # atomic, so the app never reads a half-written file
-    stats = {"events": len(events), "cards": len(data), "universe": len(universe), "seconds": round(time.time() - t0)}
+    def write(phase):
+        payload = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "today": TODAY.isoformat(),
+                   "phase": phase, "events": events, "tickers": summ, "universe": universe,
+                   "notes": {"filings_window_days": days, "filings_read": len(hits), "competitor_quotes_dropped": n_drop,
+                             "universe_min_mcap": min_mcap}}
+        OUT.parent.mkdir(parents=True, exist_ok=True)
+        tmp = OUT.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":"), default=str), encoding="utf-8")
+        tmp.replace(OUT)   # atomic, so the app never reads a half-written file
+    write("calendar")
+    log(f"Calendar ready ({len(events)} events, {time.time() - t0:.0f}s). Adding runway, implied moves, 13D/13G")
+
+    # ---- pass 2: per-company detail
+    tmap = cik_map()
+
+    def job(tk):
+        exact = sorted(e["start"] for e in events if e["ticker"] == tk and e["precision"] == "day" and e["start"] >= TODAY.isoformat())
+        out = {"runway": None, "implied": None, "stakes": [], "dilution": []}
+        try:
+            rw = runway((uw_get(f"/api/stock/{tk}/financials", ttl=72) or {}).get("data"))
+            out["runway"] = {k: rw.get(k) for k in ("months", "runs_out", "qtr_burn")} if rw else None
+            if exact:
+                out["implied"] = implied_move(tk, exact[0])
+            cik = tmap.get(tk)
+            if cik:
+                out["stakes"], out["dilution"] = sec_recent(cik)
+        except Exception as ex:  # one bad ticker must not stop the build
+            log(f"   ! {tk}: {ex}")
+        return tk, out
+
+    with ThreadPoolExecutor(12) as pool:
+        for i, f in enumerate(as_completed([pool.submit(job, t) for t in tickers]), 1):
+            tk, out = f.result()
+            summ[tk].update(out)
+            if i % 100 == 0:
+                log(f"Company detail: {i}/{len(tickers)}")
+    write("complete")
+    stats = {"events": len(events), "companies": len(tickers), "universe": len(universe), "seconds": round(time.time() - t0)}
     log(f"Done: {stats}")
     return stats
+
+
+def _chunks(xs, n):
+    for i in range(0, len(xs), n):
+        yield xs[i:i + n]
+
+
+def bulk_short(tickers):
+    """Latest FINRA short interest for many tickers in a few calls."""
+    out = {}
+    since = (TODAY - timedelta(days=45)).isoformat()
+    for ch in _chunks(tickers, 80):
+        off = 0
+        while True:
+            rows = (uw_get("/api/short_screener", {"tickers": ",".join(ch), "min_market_date": since, "limit": 500, "offset": off}, ttl=12) or {}).get("data") or []
+            for r in rows:
+                tk, md = r.get("symbol"), r.get("market_date") or ""
+                if tk in out and out[tk]["as_of"] >= md:
+                    continue
+                out[tk] = {"as_of": md, "si_float": fnum(r.get("si_float")), "dtc": fnum(r.get("days_to_cover")), "fee": fnum(r.get("fee_rate"))}
+            if len(rows) < 500:
+                break
+            off += 500
+    return out
+
+
+def bulk_insider_buys(tickers):
+    """Open-market insider buys (Form 4, code P) in the last 90 days, for many tickers in a few calls."""
+    agg = {}
+    start = (TODAY - timedelta(days=90)).isoformat()
+    for ch in _chunks(tickers, 60):
+        cursor = None
+        for _ in range(20):
+            p = {"ticker_symbol": ",".join(ch), "transaction_codes[]": "P", "form_types[]": "4", "start_date": start, "limit": 500}
+            if cursor:
+                p["cursor"] = cursor
+            j = uw_get("/api/insider/transactions", p, ttl=6) or {}
+            for t in j.get("data") or []:
+                if "common" not in (t.get("security_title") or "common").lower():
+                    continue
+                a = agg.setdefault(t["ticker"], {"buy_90d": 0.0, "who": set()})
+                a["buy_90d"] += abs(fnum(t.get("amount")) or 0) * (fnum(t.get("price")) or 0)
+                a["who"].add(t.get("owner_name"))
+            cursor = (j.get("cursor") or {}).get("next")
+            if not cursor:
+                break
+    return {tk: {"buy_90d": a["buy_90d"], "buyers_90d": len(a["who"])} for tk, a in agg.items()}
+
+
+def implied_move(tk, cat_date: str):
+    ex = (uw_get(f"/api/stock/{tk}/expiry-breakdown", ttl=4) or {}).get("data") or []
+    exp = pick_expiry([e.get("expires") for e in ex if e.get("expires")], date.fromisoformat(cat_date))
+    if not exp:
+        return None
+    v = (uw_get(f"/api/stock/{tk}/volatility/context", {"expiry": exp}, ttl=4) or {}).get("data") or {}
+    e = v.get("expiry") or {}
+    if e.get("implied_move_perc") is None:
+        return None
+    return {"expiry": e.get("expiry"), "move_pct": e.get("implied_move_perc"), "move_usd": e.get("implied_move"),
+            "iv": e.get("iv"), "iv_rank": v.get("iv_rank"), "for_date": cat_date}
+
+
+def sec_recent(cik: int):
+    """New 13D/13G (5%+, not amendments) and share-sale prospectuses in the last 90 days. Parses only those XMLs."""
+    s = sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json", as_json=True, ttl=6)
+    if not s:
+        return [], []
+    rec = s["filings"]["recent"]
+    d90 = (TODAY - timedelta(days=90)).isoformat()
+    stakes, dil = [], []
+    for i, form in enumerate(rec["form"]):
+        fd = rec["filingDate"][i]
+        if fd < d90:
+            break
+        base = f"https://www.sec.gov/Archives/edgar/data/{cik}/{rec['accessionNumber'][i].replace('-', '')}"
+        if form in ("SCHEDULE 13D", "SCHEDULE 13G") and len(stakes) < 3:
+            x = sec_get(f"{base}/primary_doc.xml", ttl=24 * 365)
+            info = parse_13x(x) if x else {}
+            if (info.get("pct") or 0) >= 5:
+                stakes.append({"form": form.replace("SCHEDULE ", ""), "date": fd, "url": f"{base}/{rec['primaryDocument'][i]}", **info})
+        elif form.startswith("424B") and len(dil) < 3:
+            dil.append({"form": form, "date": fd, "url": f"{base}/{rec['primaryDocument'][i]}"})
+    return stakes, dil
+
+
+def healthcare_rows(min_mcap: float):
+    """Every Healthcare-sector common stock / ADR above min_mcap: {ticker: {name, mcap}} from the UW screener."""
+    rows, seen, page = {}, set(), 0
+    names = sec_names()
+    while page < 20:
+        q = {"sectors[]": "Healthcare", "order": "marketcap", "order_direction": "desc", "issue_types[]": ["Common Stock", "ADR"],
+             "min_marketcap": str(int(min_mcap)), "limit": 500}
+        if page:
+            q["offset"] = page
+        batch = (uw_get("/api/screener/stocks", q, ttl=12) or {}).get("data") or []
+        fresh = [b for b in batch if b.get("ticker") and b["ticker"] not in seen]
+        for b in fresh:
+            seen.add(b["ticker"])
+            rows[b["ticker"]] = {"name": b.get("full_name") or names.get(b["ticker"].upper()), "mcap": fnum(b.get("marketcap"))}
+        if len(batch) < 50 or not fresh:
+            break
+        page += 1
+    return rows
+
+
+def healthcare_universe(min_mcap: float):
+    return {tk: r["name"] for tk, r in healthcare_rows(min_mcap).items()}
 
 
 # --------------------------------------------------------------------------- live, one ticker
@@ -862,10 +999,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="cap SEC documents for a fast test")
     ap.add_argument("--days", type=int, default=150, help="look-back window for filings")
-    ap.add_argument("--min-mcap", type=float, default=25e6, help="smallest company kept in the searchable universe")
-    ap.add_argument("--all-cards", action="store_true", help="also pre-build cards for every healthcare name")
+    ap.add_argument("--min-mcap", type=float, default=10e6, help="smallest company kept (market cap, $)")
     a = ap.parse_args()
-    run(a.quick, a.days, a.min_mcap, a.all_cards)
+    run(a.quick, a.days, a.min_mcap)
 
 
 GENERIC_FIRST = {"united", "american", "national", "global", "medical", "health", "healthcare", "pharma", "applied", "advanced",
@@ -911,38 +1047,6 @@ def drop_third_party(events, names: dict):
             continue
         kept.append(e)
     return kept, dropped
-
-
-def summary(r):
-    """The few fields the calendar, screens and search need; everything else lives in t/<TICKER>.json."""
-    d90 = (TODAY - timedelta(days=90)).isoformat()
-    s, rw, ins = r.get("short") or {}, r.get("runway") or {}, r.get("insiders") or {}
-    return {"name": r.get("name"), "mcap": r.get("mcap"), "price": r.get("price"), "chg_1m": r.get("chg_1m"),
-            "short": {k: s.get(k) for k in ("si_float", "dtc", "fee")} if s else None,
-            "runway": {k: rw.get(k) for k in ("months", "runs_out", "qtr_burn")} if rw else None,
-            "implied": r.get("implied"),
-            "insiders": {"buy_90d": ins.get("buy_90d", 0), "buyers_90d": ins.get("buyers_90d", 0)},
-            "stakes": [x for x in r.get("stakes") or [] if x["date"] >= d90 and not x["form"].endswith("/A") and (x.get("pct") or 0) >= 5][:3],
-            "dilution": [x for x in r.get("dilution") or [] if x["date"] >= d90 and x["form"].startswith("424B")][:3]}
-
-
-def healthcare_universe(min_mcap: float):
-    """Every Healthcare-sector common stock / ADR above min_mcap, from the UW screener."""
-    rows, seen, page = {}, set(), 0
-    while page < 20:
-        q = {"sectors[]": "Healthcare", "order": "marketcap", "order_direction": "desc", "issue_types[]": ["Common Stock", "ADR"],
-             "min_marketcap": str(int(min_mcap)), "limit": 500}
-        if page:
-            q["offset"] = page
-        batch = (uw_get("/api/screener/stocks", q, ttl=12) or {}).get("data") or []
-        fresh = [b for b in batch if b.get("ticker") and b["ticker"] not in seen]
-        names = sec_names()
-        for b in fresh:
-            seen.add(b["ticker"]); rows[b["ticker"]] = b.get("full_name") or names.get(b["ticker"].upper())
-        if len(batch) < 50 or not fresh:
-            break
-        page += 1
-    return rows
 
 
 if __name__ == "__main__":

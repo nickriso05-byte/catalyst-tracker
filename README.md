@@ -40,9 +40,9 @@ SEC_USER_AGENT = "Paradigm Press Catalyst Tracker contact@yourdomain.com"
 The SEC asks automated clients to identify themselves with a real contact.
 
 ## On a fresh server
-The first calendar build takes about 15 to 20 minutes, because it reads around 3,000 SEC filings.
-Company lookups work right away. After that, refreshes are faster: filing text is cached, and
-quarterly financials and 13F holdings are cached for 2 to 3 days.
+The calendar shows about 20 to 30 seconds after a fresh start, and cash runway, implied moves and 13D/13G fill in about a minute later. The SEC filing cache (cache/docs) ships in the repo, so only filings newer than the last push are read.
+Company lookups work right away. Regular refreshes only look at what changed (new filings, prices, short interest, insider buys);
+quarterly financials and 13F holdings are reused for 2 to 3 days. A normal refresh takes about 25 seconds.
 
 ## Where the numbers come from
 | Section | Source |

@@ -136,14 +136,17 @@ if D:
     stamp = f"Calendar updated {gen:%b} {gen.day}, {gen.hour % 12 or 12}:{gen:%M %p} ET"
 else:
     stamp = "Building the calendar…"
-if R["running"]:
-    stamp += f" · refreshing now ({card.esc(R['msg'])})"
+if D and D.get("phase") == "calendar":
+    stamp += " · adding cash runway, implied moves and 13D/13G…"
+elif R["running"]:
+    stamp += " · refreshing in the background"
 st.html(f'<div class="ct-top"><div class="b">CATALYST TRACKER <span>· FDA &amp; Biotech</span></div><div class="s">{stamp}</div></div>'
         '<div class="ct-sub"><span>Ray Blanco\'s Catalyst Trader</span><span class="pub">FDA Catalyst Tracker</span></div>')
 
 if not D:
-    st.info("The first build of the catalyst calendar is running. It takes about 15 to 20 minutes on a fresh server. "
-            "Company lookups below already work, live." + (f" Progress: {R['msg']}" if R["msg"] else ""))
+    st.info("Loading the catalyst calendar (about 30 seconds on a fresh server). Company lookups below already work, live."
+            + (f" Progress: {R['msg']}" if R["msg"] else ""))
+    st.button("Check again")
 
 # --------------------------------------------------------------------------- company card (dialog)
 
@@ -207,7 +210,7 @@ def open_card(tk):
 uni = (D or {}).get("universe") or {}
 if not uni:
     try:
-        uni = {tk: (nm or "").title() for tk, nm in build.healthcare_universe(25e6).items()}
+        uni = {tk: (nm or "").title() for tk, nm in build.healthcare_universe(10e6).items()}
     except Exception:
         uni = {}
 opts = [f"{tk} · {nm}" for tk, nm in sorted(uni.items())]
@@ -227,7 +230,7 @@ with c1:
 with c2:
     st.write("")
     if st.button("Refresh calendar now", disabled=R["running"], use_container_width=True,
-                 help="Re-runs the full SEC + Unusual Whales refresh in the background (about 5 to 15 minutes)."):
+                 help="Re-runs the SEC + Unusual Whales refresh in the background (usually under a minute)."):
         R["run_now"]()
         st.toast("Refresh started. The calendar updates when it finishes.")
 
@@ -389,6 +392,23 @@ if D:
 st.html('<div class="ct-card"><div class="foot">Catalyst dates come from companies\' own SEC filings and press releases. They\'re read automatically, '
         'so open a company to see the exact quote and link. Short interest is reported by FINRA twice a month. Cash runway is an estimate from the '
         'latest quarterly report. Information only, not investment advice.</div></div>')
+
+# While the calendar is still building (fresh server), check every 5 seconds and redraw when the data lands.
+def _mtime():
+    try:
+        return build.OUT.stat().st_mtime
+    except FileNotFoundError:
+        return None
+
+
+@st.fragment(run_every=5)
+def _watch(seen):
+    if _mtime() != seen:
+        st.rerun(scope="app")
+
+
+if not D or D.get("phase") == "calendar":
+    _watch(_mtime())
 
 # deep link ?t=TICKER, then open any requested card
 qt = st.query_params.get("t")

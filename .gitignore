@@ -2,7 +2,9 @@ __pycache__/
 *.pyc
 .streamlit/secrets.toml
 .secrets.toml
-cache/
+# only the SEC sentence cache ships; API responses never do
+cache/*
+!cache/docs/
 public/
 build.log
 *.tmp
