@@ -45,14 +45,20 @@ def _token(password: str) -> str:
     return hmac.new(password.encode(), b"catalyst-tracker-login-v1", "sha256").hexdigest()
 
 
+@st.cache_resource
+def _cookie_setter():
+    # A v2 component runs in the page itself (no iframe), so it can write the app's cookie directly.
+    return st.components.v2.component("ct_login_cookie", js="""
+export default function ({ data }) {
+  if (data && data.cookie) { try { document.cookie = data.cookie; } catch (e) {} }
+}""", isolate_styles=False)
+
+
 def _remember(token: str) -> None:
     """Store the login in a first-party cookie for a year, so a reload or the app waking up doesn't ask again."""
-    import streamlit.components.v1 as components
     host = (st.context.headers.get("Host") or "").split(":")[0]
     secure = "" if host in ("localhost", "127.0.0.1") else "; Secure"
-    components.html(f"""<script>
-      try {{ window.parent.document.cookie = "{_COOKIE}={token}; max-age={_COOKIE_DAYS * 86400}; path=/; SameSite=Lax{secure}"; }} catch (e) {{}}
-    </script>""", height=0)
+    _cookie_setter()(key="ct_cookie", data={"cookie": f"{_COOKIE}={token}; max-age={_COOKIE_DAYS * 86400}; path=/; SameSite=Lax{secure}"})
 
 
 def require() -> None:

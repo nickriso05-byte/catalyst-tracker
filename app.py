@@ -227,12 +227,18 @@ if tk:
         card = {"tk": tk, "t": None, "new": [], "fetched": time.time(),
                 "error": f"Couldn't load {tk} right now ({type(ex).__name__}). Try again in a minute."}
 
-UI = st.components.v2.component(
-    "catalyst_ui",
-    html=(HERE / "ui" / "ui.html").read_text(encoding="utf-8"),
-    css=(HERE / "ui" / "ui.css").read_text(encoding="utf-8"),
-    js=(HERE / "ui" / "ui.js").read_text(encoding="utf-8"),
-)
+@st.cache_resource
+def ui_component(stamp: float):
+    """Registered once per version of the ui/ files (re-registering on every rerun logs a warning)."""
+    return st.components.v2.component(
+        "catalyst_ui",
+        html=(HERE / "ui" / "ui.html").read_text(encoding="utf-8"),
+        css=(HERE / "ui" / "ui.css").read_text(encoding="utf-8"),
+        js=(HERE / "ui" / "ui.js").read_text(encoding="utf-8"),
+    )
+
+
+UI = ui_component(max(p.stat().st_mtime for p in (HERE / "ui").glob("ui.*")))
 UI(key="ct", data={"snap": D, "card": card, "cardTk": tk, "refreshing": R["running"], "verdad": V},
    on_open_change=_on_open, on_close_change=_on_close, on_refresh_change=_on_refresh)
 
