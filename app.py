@@ -111,11 +111,48 @@ def load_snapshot(mtime: float):
     return json.loads(build.OUT.read_text(encoding="utf-8"))
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def live(tk: str, events_json: str, since: str | None):
-    """Live card for one ticker, re-used for 5 minutes."""
-    c, new = build.live_card(tk, json.loads(events_json), since)
-    return c, new, time.time()
+LIVE_TTL = 300   # a live card is re-used for 5 minutes
+
+
+@st.cache_resource
+def live_jobs():
+    """Live card fetches shared across visitors: {ticker: {"status", "card", "new", "fetched", "error"}}."""
+    return {"lock": threading.Lock(), "jobs": {}}
+
+
+def start_live(tk: str, known: list, since: str | None):
+    """Kick off a live refresh of one company in the background (if one isn't fresh or already running)."""
+    L = live_jobs()
+    with L["lock"]:
+        j = L["jobs"].get(tk)
+        if j and (j["status"] == "running" or (j["status"] == "done" and time.time() - j["fetched"] < LIVE_TTL)):
+            return j
+
+        j = {"status": "running", "card": None, "new": [], "fetched": 0.0, "error": None, "started": time.time()}
+        L["jobs"][tk] = j
+
+    def work():
+        try:
+            c, new = build.live_card(tk, known, since)
+            j.update(card=c, new=new, fetched=time.time(), status="done")
+        except Exception as ex:
+            j.update(status="error", error=f"{type(ex).__name__}", fetched=time.time())
+
+    threading.Thread(target=work, daemon=True).start()
+    return j
+
+
+@st.cache_data(show_spinner=False)
+def saved_card(tk: str, mtime: float):
+    return json.loads((build.OUT.parent / "t" / f"{tk}.json").read_text(encoding="utf-8"))
+
+
+def saved_card_or_none(tk: str):
+    p = build.OUT.parent / "t" / f"{tk}.json"
+    try:
+        return saved_card(tk, p.stat().st_mtime)
+    except Exception:
+        return None
 
 
 m = _mtime()
@@ -217,18 +254,30 @@ def _on_refresh():
 
 
 card = None
+live_pending = False
 tk = ss.get("card_tk")
 if tk:
     known = [e for e in (D or {}).get("events", []) if e["ticker"] == tk]
     since = D["generated_at"][:10] if D else (date.today() - timedelta(days=150)).isoformat()
-    try:
-        t, new, fetched = live(tk, json.dumps(known), since)
-        if t and D and D.get("score_dist"):
+    job = start_live(tk, known, since)
+    if job["status"] == "done" and job["card"] is not None:
+        t = job["card"]
+        if D and D.get("score_dist"):
             t = {**t, "vscore": build.score_from(t.get("factors") or {}, D["score_dist"])}   # scored live, vs. this refresh
-        card = {"tk": tk, "t": t, "new": new, "fetched": fetched}
-    except Exception as ex:
-        card = {"tk": tk, "t": None, "new": [], "fetched": time.time(),
-                "error": f"Couldn't load {tk} right now ({type(ex).__name__}). Try again in a minute."}
+        card = {"tk": tk, "t": t, "new": job["new"], "fetched": job["fetched"], "live": True}
+    else:
+        snap = saved_card_or_none(tk)          # instant: the copy saved by the last refresh
+        live_pending = job["status"] == "running"
+        if snap:
+            saved = datetime.fromisoformat(snap["saved_at"]).timestamp() if snap.get("saved_at") else None
+            card = {"tk": tk, "t": snap, "new": [], "fetched": saved, "live": False, "updating": live_pending}
+        elif job["status"] == "done":
+            card = {"tk": tk, "t": None, "new": [], "fetched": job["fetched"], "live": True}
+        elif job["status"] == "error":
+            card = {"tk": tk, "t": None, "new": [], "fetched": time.time(),
+                    "error": f"Couldn't load {tk} right now ({job['error']}). Try again in a minute."}
+        else:
+            card = {"tk": tk, "t": None, "new": [], "fetched": None, "loading": True}
 
 @st.cache_resource
 def ui_component(stamp: float):
@@ -253,5 +302,15 @@ def _watch(seen):
         st.rerun(scope="app")
 
 
-if not D or D.get("phase") == "calendar" or R["running"]:
+# While a live card is being fetched, check every second and redraw the moment it lands.
+@st.fragment(run_every=1)
+def _watch_live(tk):
+    j = live_jobs()["jobs"].get(tk)
+    if not j or j["status"] != "running":
+        st.rerun(scope="app")
+
+
+if live_pending:
+    _watch_live(tk)
+elif not D or D.get("phase") == "calendar" or R["running"]:
     _watch(m)

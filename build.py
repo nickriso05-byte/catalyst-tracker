@@ -1029,7 +1029,37 @@ def run(quick=False, days=150, min_mcap=10e6, log=print, **_):
         summ[tk]["vscore"] = score_from(summ[tk]["factors"], dist)
     score_dist.clear(); score_dist.update(dist)
     write("complete")
-    stats = {"events": len(events), "companies": len(tickers), "universe": len(universe), "seconds": round(time.time() - t0)}
+    log(f"Scores ready ({time.time() - t0:.0f}s). Saving full company cards")
+
+    # Pass 3: a full card for every company on the calendar, so the app can open one instantly
+    # (the app then refreshes it live in the background). Mostly cache hits from pass 2.
+    tdir = OUT.parent / "t"
+    tdir.mkdir(parents=True, exist_ok=True)
+
+    def card_job(tk):
+        exact = sorted(e["start"] for e in events if e["ticker"] == tk and e["precision"] == "day" and e["start"] >= TODAY.isoformat())
+        try:
+            c = enrich(tk, tmap.get(tk), exact[0] if exact else None)
+        except Exception as ex:
+            log(f"   ! card {tk}: {ex}")
+            return tk, None
+        if c:
+            c["vscore"] = score_from(c.get("factors") or {}, dist)
+            c["saved_at"] = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        return tk, c
+
+    saved = 0
+    with ThreadPoolExecutor(8) as pool:
+        for i, f in enumerate(as_completed([pool.submit(card_job, t) for t in tickers]), 1):
+            tk, c = f.result()
+            if c:
+                tmp = tdir / f"{tk}.tmp"
+                tmp.write_text(json.dumps(c, separators=(",", ":"), default=str), encoding="utf-8")
+                tmp.replace(tdir / f"{tk}.json")
+                saved += 1
+            if i % 100 == 0:
+                log(f"Company cards: {i}/{len(tickers)}")
+    stats = {"events": len(events), "companies": len(tickers), "cards": saved, "universe": len(universe), "seconds": round(time.time() - t0)}
     log(f"Done: {stats}")
     return stats
 
